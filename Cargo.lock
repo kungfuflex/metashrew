@@ -2791,7 +2791,7 @@ dependencies = [
 
 [[package]]
 name = "memshrew-p2p"
-version = "10.0.0-alpha.1"
+version = "10.0.0-alpha.3"
 dependencies = [
  "actix-cors",
  "actix-web",
@@ -2812,7 +2812,7 @@ dependencies = [
 
 [[package]]
 name = "memshrew-runtime"
-version = "10.0.0-alpha.1"
+version = "10.0.0-alpha.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2824,7 +2824,7 @@ dependencies = [
 
 [[package]]
 name = "metashrew-core"
-version = "10.0.0-alpha.1"
+version = "10.0.0-alpha.3"
 dependencies = [
  "anyhow",
  "bitcoin 0.31.3",
@@ -2841,7 +2841,7 @@ dependencies = [
 
 [[package]]
 name = "metashrew-memory-stress"
-version = "10.0.0-alpha.1"
+version = "10.0.0-alpha.3"
 dependencies = [
  "bitcoin 0.32.8",
  "metashrew-core",
@@ -2850,7 +2850,7 @@ dependencies = [
 
 [[package]]
 name = "metashrew-minimal"
-version = "10.0.0-alpha.1"
+version = "10.0.0-alpha.3"
 dependencies = [
  "anyhow",
  "bitcoin 0.32.8",
@@ -2861,7 +2861,7 @@ dependencies = [
 
 [[package]]
 name = "metashrew-runtime"
-version = "10.0.0-alpha.1"
+version = "10.0.0-alpha.3"
 dependencies = [
  "anyhow",
  "hex",
@@ -2881,7 +2881,7 @@ dependencies = [
 
 [[package]]
 name = "metashrew-support"
-version = "10.0.0-alpha.1"
+version = "10.0.0-alpha.3"
 dependencies = [
  "anyhow",
  "bech32 0.11.1",
@@ -2893,7 +2893,7 @@ dependencies = [
 
 [[package]]
 name = "metashrew-sync"
-version = "10.0.0-alpha.1"
+version = "10.0.0-alpha.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2901,6 +2901,7 @@ dependencies = [
  "hex",
  "log",
  "metashrew-runtime",
+ "metashrew-validator-core",
  "num_cpus",
  "rocksdb",
  "serde",
@@ -2939,6 +2940,18 @@ dependencies = [
  "tokio-test",
  "wasmtime",
  "zstd",
+]
+
+[[package]]
+name = "metashrew-validator-core"
+version = "10.0.0-alpha.3"
+dependencies = [
+ "anyhow",
+ "bitcoin 0.32.8",
+ "hex",
+ "sha2",
+ "wasmtime",
+ "wat",
 ]
 
 [[package]]
@@ -3868,7 +3881,7 @@ dependencies = [
 
 [[package]]
 name = "rockshrew-diff"
-version = "10.0.0-alpha.1"
+version = "10.0.0-alpha.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -3877,7 +3890,7 @@ dependencies = [
 
 [[package]]
 name = "rockshrew-mono"
-version = "10.0.0-alpha.1"
+version = "10.0.0-alpha.3"
 dependencies = [
  "actix-cors",
  "actix-web",
@@ -3890,11 +3903,13 @@ dependencies = [
  "env_logger",
  "hex",
  "itertools 0.14.0",
+ "libc",
  "log",
  "memshrew-runtime",
  "metashrew-core",
  "metashrew-runtime",
  "metashrew-sync",
+ "metashrew-validator-core",
  "num_cpus",
  "once_cell",
  "rand 0.8.5",
@@ -3908,6 +3923,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "tikv-jemallocator",
  "tokio",
  "tokio-test",
  "tokio-util",
@@ -3920,7 +3936,7 @@ dependencies = [
 
 [[package]]
 name = "rockshrew-runtime"
-version = "10.0.0-alpha.1"
+version = "10.0.0-alpha.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4817,6 +4833,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f60246a4944f24f6e018aa17cdeffb7818b76356965d03b07d6a9886e8962185"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "tikv-jemalloc-sys"
+version = "0.6.1+5.3.0-1-ge13ca993e8ccb9ba9847cc330696e02839f328f7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd8aa5b2ab86a2cefa406d889139c162cbb230092f7d1d7cbc1716405d852a3b"
+dependencies = [
+ "cc",
+ "libc",
+]
+
+[[package]]
+name = "tikv-jemallocator"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0359b4327f954e0567e69fb191cf1436617748813819c94b8cd4a431422d053a"
+dependencies = [
+ "libc",
+ "tikv-jemalloc-sys",
 ]
 
 [[package]]

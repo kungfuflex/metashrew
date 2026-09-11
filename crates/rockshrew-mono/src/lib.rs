@@ -50,6 +50,7 @@ pub mod adapters;
 pub mod snapshot;
 pub mod snapshot_adapters;
 pub mod ssh_tunnel;
+pub mod cpu_isolation;
 
 #[cfg(test)]
 mod tests;
@@ -256,6 +257,39 @@ pub struct Args {
     pub max_reorg_depth: u32,
     #[arg(long, default_value_t = 6)]
     pub reorg_check_threshold: u32,
+
+    /// Enforce a chain-validation policy before applying each block.
+    ///
+    /// Off by default, which keeps the historical behaviour: the block
+    /// body is checked against the hash the node gave for that height,
+    /// and the header's parent is checked against what we stored — but
+    /// nothing verifies proof of work, difficulty, or that the chain is
+    /// rooted at the real genesis. That is a continuity check, not an
+    /// SPV proof; see docs/SPV_AUDIT.md.
+    ///
+    /// Enabling this replaces those inline checks with the policy named
+    /// by `--spv-type`, which additionally rejects blocks with no valid
+    /// work, blocks whose parent hash is unknown, and an endpoint
+    /// serving a different chain's genesis.
+    #[arg(long, default_value_t = false)]
+    pub enable_spv: bool,
+
+    /// Which policy `--enable-spv` enforces.
+    ///
+    ///   mainnet | bitcoin   hash binding, parent linkage, genesis
+    ///                       anchor, and proof of work
+    ///   testnet | signet | regtest
+    ///                       the same, anchored to that network
+    ///   auxpow              merged-mined chains: no proof-of-work check,
+    ///                       because the target is met by the parent
+    ///                       chain's header
+    ///   continuity          the legacy checks, named explicitly
+    ///   custom:<path>.wasm  a sandboxed module; see
+    ///                       crates/metashrew-validator-core
+    ///
+    /// Built-in policies are native Rust and never touch a wasm runtime.
+    #[arg(long, default_value = "mainnet")]
+    pub spv_type: String,
     #[arg(long)]
     pub prefetch_size: Option<usize>,
     /// Enable the `metashrew_preview` JSON-RPC method.
@@ -338,6 +372,62 @@ pub struct Args {
     /// fresh-sync deployments only.
     #[arg(long, default_value_t = false)]
     pub sync_mode: bool,
+
+    /// v9.0.5-rc.11 CPU isolation: reserve N cores for the indexer
+    /// (block-processor thread + its dedicated tokio runtime). View
+    /// handler threads (actix-web workers + the main tokio runtime)
+    /// are pinned to the remaining cores, so a flood of view calls
+    /// can never starve indexing of CPU. Pod cgroup cpuset is read
+    /// from /proc/self/status to detect available cores. 0 = off
+    /// (no affinity changes). Default: 0.
+    ///
+    /// Example: pod with 16 CPU request, `--indexer-cores 4` →
+    /// indexer pool = cores 0-3, view pool = cores 4-15. Even at
+    /// 100% view load the indexer always has 4 dedicated cores.
+    /// Pair with `--indexer-nice` / `--view-nice` for additional
+    /// CFS-weight priority on the boundary case where threads share
+    /// a core.
+    #[arg(long, env = "ROCKSHREW_INDEXER_CORES", default_value_t = 0)]
+    pub indexer_cores: usize,
+
+    /// v9.0.5-rc.11 CPU isolation: Linux nice value for the indexer
+    /// thread and its runtime workers. Negative = higher priority
+    /// (gets more CPU time when contending). Range: -20 (max
+    /// priority) to 19 (min). Requires CAP_SYS_NICE in the container.
+    /// 0 = off. Default: 0.
+    ///
+    /// Combined with `--view-nice +5`, a -10 indexer nice gives the
+    /// indexer ~28× the CFS weight of view threads on any shared
+    /// core. On EPERM (missing cap) we log a warning and continue
+    /// without priority isolation rather than failing to start.
+    #[arg(long, env = "ROCKSHREW_INDEXER_NICE", default_value_t = 0,
+          value_parser = clap::value_parser!(i32).range(-20..=19))]
+    pub indexer_nice: i32,
+
+    /// v9.0.5-rc.11 CPU isolation: Linux nice value for HTTP/view
+    /// handler threads (actix-web workers + the main tokio runtime).
+    /// Positive = lower priority. Range: -20..19. Requires
+    /// CAP_SYS_NICE in the container. 0 = off. Default: 0.
+    /// See `--indexer-nice` for context.
+    #[arg(long, env = "ROCKSHREW_VIEW_NICE", default_value_t = 0,
+          value_parser = clap::value_parser!(i32).range(-20..=19))]
+    pub view_nice: i32,
+
+    /// v9.0.5-rc.12 dedicated view-runtime: number of tokio worker
+    /// threads in the third runtime that hosts ONLY metashrew_view +
+    /// metashrew_preview WASM execution. Isolates view CPU from the
+    /// actix-web accept loop + cheap RPCs (metashrew_height,
+    /// metashrew_getblockhash) so view saturation can't queue sub-ms
+    /// storage reads behind WASM that holds a worker thread for
+    /// hundreds of ms between yield points.
+    ///
+    /// None (default) auto-sizes: when --indexer-cores > 0, uses
+    /// max(4, view_pool.len() - 2) to leave a couple of view-pool
+    /// cores for actix-web. Otherwise uses max(4, num_cpus / 2).
+    /// Threads are pinned to the same view-pool cores as the actix
+    /// workers (via cpu_isolation) and run at --view-nice priority.
+    #[arg(long, env = "ROCKSHREW_VIEW_RUNTIME_WORKERS")]
+    pub view_runtime_workers: Option<usize>,
 }
 
 /// Shared application state for the JSON-RPC server.
@@ -359,6 +449,14 @@ where
     /// (kept for tests). The per-view WASM memory cap is enforced
     /// separately by the `RuntimeAdapter` via `view_with_limits`.
     pub view_limiter: Option<Arc<metashrew_runtime::ViewLimiter>>,
+    /// v9.0.5-rc.12 dedicated view-runtime: handle to the third tokio
+    /// runtime that hosts metashrew_view + metashrew_preview WASM
+    /// execution. handle_jsonrpc spawns view work onto this runtime
+    /// instead of the main (actix-web) runtime so cheap RPCs aren't
+    /// queued behind WASM workers. None = run on the main runtime
+    /// (kept for run_test). See the rc.12 build comment in run_prod
+    /// for the contract.
+    pub view_runtime: Option<tokio::runtime::Handle>,
 }
 
 /// Per-method server-side timeout. Bounds how long a single JSON-RPC request
@@ -438,9 +536,26 @@ where
     // necessary because actix's handler future is bound to the request
     // lifecycle; the spawned task observes cancellation via the shared token
     // and exits at the next WASM yield point.
+    //
+    // v9.0.5-rc.12 view-runtime split: metashrew_view and metashrew_preview
+    // run on a SEPARATE tokio runtime (state.view_runtime). That runtime's
+    // workers are pinned to the view-pool cores and dedicated exclusively
+    // to WASM execution — so even when N concurrent view calls pin every
+    // view-runtime worker for hundreds of ms each, cheap RPCs spawned via
+    // tokio::spawn (the main actix runtime) get scheduled without queueing
+    // behind them. CancellationToken clones are Arc, so the existing drop-
+    // guard cancellation works across runtime boundaries. JoinHandle<T>
+    // returned by Handle::spawn is awaitable from the actix runtime via
+    // standard tokio interop. When state.view_runtime is None (run_test
+    // path), falls back to tokio::spawn — same behavior as v9.0.5-rc.11.
     let view_limiter = state.view_limiter.clone();
     let acquire_timeout = timeout;
-    let work = tokio::spawn(async move {
+    let is_view = matches!(
+        method_for_work.as_str(),
+        "metashrew_view" | "metashrew_preview"
+    );
+    let view_runtime_for_spawn = state.view_runtime.clone();
+    let work_fut_outer = async move {
         let work_fut = async move {
             match method_for_work.as_str() {
                 "metashrew_view" => {
@@ -611,7 +726,15 @@ where
             ),
             r = work_fut => r,
         }
-    });
+    };
+
+    // v9.0.5-rc.12: dispatch view/preview onto the dedicated view runtime;
+    // everything else stays on the main (actix) runtime. The future is moved
+    // into exactly one match arm.
+    let work = match (is_view, view_runtime_for_spawn) {
+        (true, Some(handle)) => handle.spawn(work_fut_outer),
+        _ => tokio::spawn(work_fut_outer),
+    };
 
     let start_time = Instant::now();
 
@@ -764,13 +887,35 @@ where
         SyncMode::Normal
     };
 
-    let sync_engine = SnapshotMetashrewSync::new(
+    let mut sync_engine = SnapshotMetashrewSync::new(
         node_adapter,
         storage_adapter,
         runtime_adapter,
         sync_config,
         sync_mode,
     );
+
+    // Chain-validation policy. Resolved before any block is fetched so a
+    // bad --spv-type or an unloadable custom validator fails at startup
+    // rather than a hundred blocks in.
+    if args.enable_spv {
+        let policy = metashrew_validator_core::Policy::parse(&args.spv_type)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        let validator = metashrew_validator_core::validator_for(&policy)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        info!("SPV validation ENABLED — {}", validator.describe());
+        sync_engine.set_validator(Arc::from(validator));
+    } else {
+        // Say plainly what is not being enforced. An operator pointing
+        // --daemon-rpc-url at a remote endpoint should not have to read
+        // the source to find this out.
+        warn!(
+            "SPV validation is OFF: block bodies are checked against the hash the node \
+             reports and against the previous block, but proof of work, difficulty and \
+             genesis are NOT verified. Treat --daemon-rpc-url as trusted infrastructure. \
+             Pass --enable-spv to enforce a policy (see docs/SPV_AUDIT.md)."
+        );
+    }
 
     sync_engine.init().await;
 
@@ -812,10 +957,75 @@ where
     );
     let view_limiter = Arc::new(metashrew_runtime::ViewLimiter::new(view_limits_cfg));
 
+    // v9.0.5-rc.12: detect pod cpuset + split into indexer/view pools
+    // EARLY so the view-runtime can be built before AppState. (The
+    // processor std::thread spawn further down re-uses these same
+    // pools.) The original v9.0.5-rc.11 site at the processor spawn
+    // is moved earlier here — same effect; the detection is a pure
+    // /proc read.
+    let pod_cores = cpu_isolation::detect_pod_cpus();
+    let (indexer_cores_set, view_cores_set) =
+        cpu_isolation::split_cores(&pod_cores, args.indexer_cores);
+    if args.indexer_cores > 0 {
+        info!(
+            "CPU isolation: detected {} cores ({:?}); indexer pool = {:?}, view pool = {:?}",
+            pod_cores.len(),
+            pod_cores,
+            indexer_cores_set,
+            view_cores_set
+        );
+    }
+
+    // v9.0.5-rc.12: dedicated view-runtime. Isolates WASM execution
+    // from the actix accept loop + cheap RPCs (metashrew_height,
+    // metashrew_getblockhash, etc.) so view-call saturation can't
+    // queue sub-ms storage reads behind WASM that holds a worker
+    // thread for hundreds of ms between yield points. The pool is
+    // pinned to the view-cores subset and runs at view_nice — same
+    // scheduling class as the actix view-workers but on dedicated
+    // workers that NEVER touch the actix accept loop or RPC dispatch.
+    //
+    // We keep the Runtime alive past HttpServer::run().await by
+    // binding it to a long-lived guard. Dropping a Runtime calls
+    // shutdown_background() which terminates worker threads — only
+    // safe at process exit.
+    let view_runtime_workers = args.view_runtime_workers.unwrap_or_else(|| {
+        if args.indexer_cores > 0 {
+            // Leave a couple of view-pool cores for actix-web's own workers
+            // (accept loop + cheap RPC dispatch). Floor at 4 so even small
+            // pods get a usable view runtime.
+            view_cores_set.len().saturating_sub(2).max(4)
+        } else {
+            (num_cpus::get() / 2).max(4)
+        }
+    });
+    let view_cores_for_rt = view_cores_set.clone();
+    let view_nice_for_rt = args.view_nice;
+    let view_runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(view_runtime_workers)
+        .thread_name("view-worker")
+        .on_thread_start(move || {
+            if let Err(e) = cpu_isolation::set_thread_affinity(&view_cores_for_rt) {
+                warn!("view-worker: set_thread_affinity failed: {}", e);
+            }
+            if let Err(e) = cpu_isolation::set_thread_nice(view_nice_for_rt) {
+                warn!("view-worker: set_thread_nice failed: {}", e);
+            }
+        })
+        .enable_all()
+        .build()
+        .expect("Failed to create view runtime");
+    info!(
+        "view runtime started ({} workers, pinned to {:?})",
+        view_runtime_workers, view_cores_set
+    );
+    let view_runtime_handle = view_runtime.handle().clone();
+
     let app_state = web::Data::new(AppState {
         sync_engine: sync_engine_arc.clone(),
         enable_preview: args.enable_preview,
         view_limiter: Some(view_limiter.clone()),
+        view_runtime: Some(view_runtime_handle.clone()),
     });
 
     // Cap the prefetch buffer at reorg_check_threshold so the fetcher can
@@ -951,7 +1161,22 @@ where
                     // height (which it can do if `handle_reorg` lowers
                     // `current_height` between iterations).
                     let min_send_height = near_tip_min_send_height(last_sent_snapshot);
-                    match engine.get_next_block_data().await {
+                    // v9.0.5-rc.13: pass min_send_height as the fetch
+                    // floor so get_next_block_data ALWAYS returns a
+                    // block at height >= last_sent + 1. Without this
+                    // floor, get_next_block_data uses self.current_height
+                    // (the engine's in-memory atomic) which handle_reorg
+                    // can silently lower in a non-reorg edge case (e.g.
+                    // a transient hash mismatch between local storage
+                    // and bouncer/bitcoind during reorg detection). The
+                    // fetcher then drops every poll via near_tip_should_drop
+                    // and the processor wedges idle forever. Production
+                    // saw this 2026-05-26: j stuck at 951049 for 8+ min
+                    // post-commit, requiring manual pod restart to clear.
+                    match engine
+                        .get_next_block_data_with_floor(Some(min_send_height))
+                        .await
+                    {
                         Ok(Some((height, block_data, block_hash))) => {
                             drop(engine);
                             if near_tip_should_drop(last_sent_snapshot, height) {
@@ -1074,6 +1299,22 @@ where
     // Block processor runs on a dedicated tokio runtime so it never competes
     // with RPC view calls for thread pool time. This ensures indexing progresses
     // steadily regardless of RPC load, and views are never starved by indexing.
+    //
+    // v9.0.5-rc.11: CPU isolation. When `--indexer-cores N > 0`, the
+    // detected pod cpuset is split — first N cores are the indexer pool,
+    // the rest are the view pool. The processor std::thread + its 4 tokio
+    // workers all get `sched_setaffinity` to the indexer pool, so they
+    // CAN'T be evicted from those cores by the actix-web/view threads
+    // (which the HTTP server setup further down pins to the complementary
+    // view pool). Combined with `--indexer-nice -10 --view-nice +5`, the
+    // kernel CFS scheduler gives the indexer a hard CPU floor.
+    //
+    // v9.0.5-rc.12: the cpu_isolation detect_pod_cpus + split_cores +
+    // info!() block was hoisted earlier in run_prod() so the view
+    // runtime (built before AppState) can re-use the same view_cores_set.
+    // indexer_cores_set / view_cores_set are still in scope here.
+    let indexer_cores_for_processor = indexer_cores_set.clone();
+    let indexer_nice = args.indexer_nice;
     let processor_handle = std::thread::Builder::new()
         .name("block-processor".into())
         .spawn({
@@ -1081,9 +1322,30 @@ where
             let result_sender_clone = result_sender.clone();
 
             move || {
+                // Set affinity + nice for the processor driver thread.
+                if let Err(e) = cpu_isolation::set_thread_affinity(&indexer_cores_for_processor) {
+                    warn!("processor: set_thread_affinity failed: {}", e);
+                }
+                if let Err(e) = cpu_isolation::set_thread_nice(indexer_nice) {
+                    warn!("processor: set_thread_nice failed: {}", e);
+                }
+                // The runtime's worker threads each get the same
+                // isolation via on_thread_start. Clone the config into
+                // the closure so it stays alive for the runtime's
+                // lifetime.
+                let worker_cores = indexer_cores_for_processor.clone();
+                let worker_nice = indexer_nice;
                 let rt = tokio::runtime::Builder::new_multi_thread()
                     .worker_threads(4)
                     .thread_name("processor-worker")
+                    .on_thread_start(move || {
+                        if let Err(e) = cpu_isolation::set_thread_affinity(&worker_cores) {
+                            warn!("processor-worker: set_thread_affinity failed: {}", e);
+                        }
+                        if let Err(e) = cpu_isolation::set_thread_nice(worker_nice) {
+                            warn!("processor-worker: set_thread_nice failed: {}", e);
+                        }
+                    })
                     .enable_all()
                     .build()
                     .expect("Failed to create processor runtime");
@@ -1196,9 +1458,36 @@ where
         }
     }});
 
+    // v9.0.5-rc.11 CPU isolation: HTTP/view workers pinned to the
+    // complementary core pool + given a higher (more polite) nice
+    // value. actix-web invokes the factory closure once per worker
+    // thread to build that worker's App — we call sched_setaffinity +
+    // setpriority on entry so the worker's own thread is constrained
+    // before it serves any request. The remaining tokio main-runtime
+    // threads (fetcher dispatch, server accept loop) stay unpinned
+    // since they're IO-bound and don't compete with the indexer for
+    // CPU.
+    //
+    // worker count: when isolation is on, one worker per view-pool
+    // core. When off, leave actix's default (num_cpus).
+    let view_workers = if args.indexer_cores > 0 {
+        view_cores_set.len().max(1)
+    } else {
+        num_cpus::get()
+    };
+    let view_cores_for_workers = view_cores_set.clone();
+    let view_nice = args.view_nice;
     let server_handle = tokio::spawn({
         let args_clone = Arc::new(args.clone());
         HttpServer::new(move || {
+            // Per-worker thread setup. Idempotent across calls (the
+            // syscalls just re-set the same affinity / nice).
+            if let Err(e) = cpu_isolation::set_thread_affinity(&view_cores_for_workers) {
+                warn!("view-worker: set_thread_affinity failed: {}", e);
+            }
+            if let Err(e) = cpu_isolation::set_thread_nice(view_nice) {
+                warn!("view-worker: set_thread_nice failed: {}", e);
+            }
             let cors = match &args_clone.cors {
                 Some(cors_value) if cors_value == "*" => Cors::default()
                     .allow_any_origin()
@@ -1221,6 +1510,7 @@ where
                         .route(web::post().to(handle_jsonrpc::<N, S, R>))
                 )
         })
+        .workers(view_workers)
         .bind((args.host.as_str(), args.port))?
         .run()
     });

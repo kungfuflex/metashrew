@@ -1,0 +1,29 @@
+[package]
+name = "metashrew-validator-core"
+version = "10.0.0-alpha.3"
+edition = "2021"
+description = "Chain-validation policies for metashrew: built-in native validators plus the ABI for custom wasm ones"
+
+[dependencies]
+sha2 = "0.10"
+hex = "0.4.3"
+# Used only to derive genesis hashes and parse headers for the built-in
+# validators. Deriving them beats hardcoding 32-byte constants nobody
+# can check by eye.
+bitcoin = { version = "0.32.6", default-features = false, features = ["std"] }
+
+# Host-side runner for `--spv-type custom:<path>.wasm`. Off by default so
+# a guest validator can depend on this crate without pulling wasmtime.
+wasmtime = { version = "43", optional = true }
+anyhow = { version = "1.0", optional = true }
+
+[features]
+default = []
+# Run custom wasm validators. Host-side only.
+host-wasm = ["dep:wasmtime", "dep:anyhow"]
+# Guest-side helpers for writing a validator that compiles to wasm.
+guest = []
+
+[dev-dependencies]
+# Inline WAT fixtures for the custom-validator sandbox tests.
+wat = "1"

@@ -11,7 +11,6 @@ use metashrew_sync::{
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use wasmtime::Engine;
 
 /// An in-memory Bitcoin node adapter for testing
 #[derive(Clone)]
@@ -102,10 +101,11 @@ pub struct InMemoryRuntime {
 impl InMemoryRuntime {
     pub async fn new(wasm_bytes: &[u8]) -> Self {
         let store = MemStore::new();
-        let mut config = wasmtime::Config::default();
-        config.async_support(true);
-        let engine = Engine::new(&config).unwrap();
-        let runtime = MetashrewRuntime::new(wasm_bytes, store, engine).await.unwrap();
+        // The engine is no longer constructed here: `MetashrewRuntime::new`
+        // builds it internally from `indexer_config()` so the deterministic
+        // flags are guaranteed by construction. The previous bare-defaults
+        // `Config` built here was precisely the defect.
+        let runtime = MetashrewRuntime::new(wasm_bytes, store).await.unwrap();
         Self { runtime }
     }
 

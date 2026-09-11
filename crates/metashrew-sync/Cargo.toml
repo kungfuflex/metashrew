@@ -1,6 +1,6 @@
 [package]
 name = "metashrew-sync"
-version = "10.0.0-alpha.1"
+version = "10.0.0-alpha.3"
 edition = "2021"
 
 [dependencies]
@@ -14,6 +14,7 @@ async-trait = "0.1.83"
 thiserror = "1.0.69"
 num_cpus = "1.16.0"
 bitcoin = "0.32.4"
+metashrew-validator-core = { path = "../metashrew-validator-core" }
 rocksdb = "0.21.0"
 sha2 = "0.10"
 metashrew-runtime = { path = "../metashrew-runtime" }

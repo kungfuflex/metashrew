@@ -1,6 +1,6 @@
 [package]
 name = "rockshrew-diff"
-version = "10.0.0-alpha.1"
+version = "10.0.0-alpha.3"
 edition = "2021"
 
 [[bin]]
