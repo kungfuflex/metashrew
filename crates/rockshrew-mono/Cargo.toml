@@ -1,6 +1,6 @@
 [package]
 name = "rockshrew-mono"
-version = "10.0.0-alpha.1"
+version = "10.0.0-alpha.3"
 edition = "2021"
 
 [lib]
@@ -29,6 +29,7 @@ serde = "1.0.217"
 log = "0.4.25"
 env_logger = "0.11.6"
 hex = "0.4.3"
+metashrew-validator-core = { path = "../metashrew-validator-core", features = ["host-wasm"] }
 rocksdb = { version = "0.21.0", features = ["multi-threaded-cf"] }
 tokio = { version = "1.43.0", features = ["full", "tracing"] }
 # CancellationToken + DropGuard wire the actix handler future drop into the
@@ -42,6 +43,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 console-subscriber = { version = "0.2", optional = true }
 num_cpus = "1.16.0"
+# Used by cpu_isolation.rs for sched_setaffinity / setpriority — the
+# kernel knobs that pin the indexer to its own cores and give it higher
+# scheduling weight than view-handler threads.
+libc = "0.2"
 url = "2.5.0"  # Added for URL parsing in SSH tunneling
 dirs = "5.0.1"  # Added for home directory detection
 bytes = "1.5.0"  # Added for handling binary data in responses
@@ -57,8 +62,38 @@ zstd = "0.13.0"  # Added for snapshot compression
 # node, block 892936 retried 600+ attempts).
 rlimit = "0.10"
 
+# Global allocator. glibc's malloc is a poor fit for this process: it sizes its
+# arena pool at 8 * ncores (384 arenas on a 48-core box), and every arena
+# retains freed memory in its own free-lists rather than returning it to the OS.
+# With ~124 live threads (34 view workers + the indexer pool + RocksDB's own
+# background threads) that is a large, unbounded fragmentation surface, and it
+# is why operators have had to paper over RSS growth with MALLOC_ARENA_MAX=2.
+#
+# `unprefixed_malloc_on_supported_platforms` is the load-bearing part. Without
+# it, tikv-jemallocator only exports the prefixed `_rjem_malloc` symbols and
+# only Rust's `#[global_allocator]` path routes through jemalloc — every C/C++
+# allocation keeps going to glibc. RocksDB (librocksdb-sys) is a large C++
+# allocator consumer here, so leaving it on glibc would defeat the purpose.
+# With the feature on, jemalloc defines plain `malloc`/`free`/`operator new`
+# in the executable's dynamic symbol table, and both the statically linked
+# librocksdb-sys objects and libstdc++'s `operator new` bind to it.
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = { version = "0.6", features = [
+    "unprefixed_malloc_on_supported_platforms",
+] }
+
 [features]
 default = []
+# Heap profiling. jemalloc's `prof:*` MALLOC_CONF knobs are compiled OUT unless
+# jemalloc is built with --enable-prof, which is what tikv-jemallocator's
+# `profiling` feature turns on; without this feature `MALLOC_CONF=prof:true`
+# is rejected at startup with "Invalid conf pair: prof:true". `stats` likewise
+# gates the actual allocation counters in `stats_print` output.
+#
+# This costs a small amount of per-allocation overhead, so it is OFF by default
+# and shipped as a separate diagnostic image rather than baked into the normal
+# build. See Dockerfile.jemalloc --build-arg CARGO_FEATURES=jemalloc-prof.
+jemalloc-prof = ["tikv-jemallocator/profiling", "tikv-jemallocator/stats"]
 console = ["console-subscriber"]
 debug-tracing = ["tracing-subscriber/json"]
 ssh_e2e_tests = []

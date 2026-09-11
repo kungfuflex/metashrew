@@ -1,0 +1,84 @@
+# rockshrew-mono v9.0.5-rc.14 + jemalloc global allocator.
+#
+# Base: tag v9.0.5-rc.14 (commit a60ec16) — the same rockshrew-mono source that
+# ships in registry.subfrost.io/subkube/metashrew:mainnet-v905rc14-spv-v221rc4
+# (the image rockshrew-a / rockshrew-e run in mainnet-alkanes).
+#
+# The ONLY source delta vs that tag is the allocator:
+#   * crates/rockshrew-mono/Cargo.toml — tikv-jemallocator 0.6 with
+#     `unprefixed_malloc_on_supported_platforms`
+#   * crates/rockshrew-mono/src/main.rs — #[global_allocator]
+#
+# Toolchain (rust:1.90-bookworm) and runtime base (debian:bookworm-slim) are
+# kept identical to docker/metashrew/Dockerfile.mainnet-v905rc13-fetcherfix-*
+# in ~/subkube so the image differs in the allocator and nothing else.
+#
+# NOTE: no indexer.wasm is baked in. alspo-aio stages its own wasm via an
+# initContainer and passes `--indexer /wasm/indexer.wasm`, so a baked wasm is
+# unused there. Do NOT roll this onto rockshrew-a/e, which DO rely on the
+# baked /metashrew/indexer.wasm from the v221rc4 image.
+#
+# Build:
+#   docker build -t registry.subfrost.io/subkube/metashrew:v9.0.5-rc.14-jemalloc \
+#                -f Dockerfile.jemalloc .
+
+FROM rust:1.90-bookworm AS builder
+
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    git \
+    pkg-config \
+    clang \
+    libclang-dev \
+    libssl-dev \
+    protobuf-compiler \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build/metashrew
+COPY . .
+
+# CARGO_FEATURES=jemalloc-prof builds the diagnostic variant, which compiles
+# jemalloc with --enable-prof + --enable-stats so MALLOC_CONF=prof:true and the
+# full stats_print counters are available. Default (empty) is the lean image.
+ARG CARGO_FEATURES=""
+RUN if [ -n "$CARGO_FEATURES" ]; then \
+        cargo build --release -p rockshrew-mono --bin rockshrew-mono --features "$CARGO_FEATURES"; \
+    else \
+        cargo build --release -p rockshrew-mono --bin rockshrew-mono; \
+    fi
+
+# Fail the build if jemalloc did not actually land in the binary. Without
+# `unprefixed_malloc_on_supported_platforms` the plain `malloc` symbol would be
+# absent and RocksDB's C++ allocations would silently stay on glibc, which is
+# the entire point of this image.
+RUN set -eux; \
+    nm -D target/release/rockshrew-mono | grep -qE ' T (malloc|_rjem_malloc)$'; \
+    nm -D target/release/rockshrew-mono | grep -qw 'T malloc'; \
+    echo "jemalloc verified: unprefixed malloc exported"
+
+# === Runtime stage ===
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y \
+    libssl3 \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/metashrew/target/release/rockshrew-mono /usr/local/bin/
+
+RUN useradd -r -s /bin/false metashrew \
+    && mkdir -p /data /metashrew \
+    && chown metashrew:metashrew /data /metashrew
+
+USER metashrew
+VOLUME /data
+
+EXPOSE 8080
+
+ENV RUST_LOG=none \
+    HOST=0.0.0.0 \
+    PORT=8080 \
+    DB_PATH=/data
+
+CMD ["rockshrew-mono"]

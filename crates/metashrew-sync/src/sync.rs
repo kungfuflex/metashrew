@@ -243,6 +243,14 @@ where
     S: StorageAdapter,
     R: RuntimeAdapter,
 {
+    /// Opt-in chain-validation policy (`--enable-spv`).
+    ///
+    /// `None` keeps the legacy inline continuity check. `Some(_)`
+    /// replaces it wholesale: the policy is the single place that
+    /// decides whether a block may be applied, so there is no way for
+    /// the two to disagree. See `metashrew-validator-core`.
+    validator: Option<std::sync::Arc<dyn metashrew_validator_core::ChainValidator>>,
+
     node: Arc<N>,
     storage: Arc<RwLock<S>>,
     runtime: Arc<R>,
@@ -263,6 +271,8 @@ where
     /// Create a new sync engine
     pub fn new(node: N, storage: S, runtime: R, config: SyncConfig) -> Self {
         Self {
+            // Opt-in; installed later via `set_validator`.
+            validator: None,
             node: Arc::new(node),
             storage: Arc::new(RwLock::new(storage)),
             runtime: Arc::new(runtime),
@@ -363,8 +373,20 @@ where
     }
 
     pub async fn get_next_block_data(&self) -> SyncResult<Option<(u32, Vec<u8>, Vec<u8>)>> {
+        self.get_next_block_data_with_floor(None).await
+    }
+
+    /// v9.0.5-rc.13: `min_target_height` floor for the next-block-to-fetch
+    /// decision. See `SnapshotMetashrewSync::get_next_block_data_with_floor`
+    /// for the full motivation — the short version is "defend against
+    /// fetcher wedging when handle_reorg silently lowers current_height
+    /// past what the outer fetcher loop already enqueued".
+    pub async fn get_next_block_data_with_floor(
+        &self,
+        min_target_height: Option<u32>,
+    ) -> SyncResult<Option<(u32, Vec<u8>, Vec<u8>)>> {
         let mut current_height = self.current_height.load(Ordering::SeqCst);
-        
+
         // Get remote tip
         let remote_tip = self.node.get_tip_height().await?;
 
@@ -393,38 +415,58 @@ where
             }
         }
 
+        // v9.0.5-rc.13: clamp the fetch target to >= min_target_height so
+        // the outer fetcher loop's `last_sent + 1` watermark always wins
+        // over a phantom-rolled-back current_height.
+        let fetch_height = match min_target_height {
+            Some(m) if m > current_height => m,
+            _ => current_height,
+        };
+
         // Check exit condition
         if let Some(exit_at) = self.config.exit_at {
-            if current_height >= exit_at {
+            if fetch_height >= exit_at {
                 info!("Fetcher reached exit height {}", exit_at);
                 return Ok(None);
             }
         }
 
         // Check if we need to wait for new blocks
-        if current_height > remote_tip {
+        if fetch_height > remote_tip {
             debug!(
-                "Waiting for new blocks: current={}, tip={}",
-                current_height, remote_tip
+                "Waiting for new blocks: fetch_height={}, tip={}",
+                fetch_height, remote_tip
             );
             return Ok(None);
         }
 
         // Fetch block
-        match self.node.get_block_info(current_height).await {
+        match self.node.get_block_info(fetch_height).await {
             Ok(block_info) => {
                 info!(
                     "Fetched block {} ({} bytes)",
-                    current_height,
+                    fetch_height,
                     block_info.data.len()
                 );
-                Ok(Some((current_height, block_info.data, block_info.hash)))
+                Ok(Some((fetch_height, block_info.data, block_info.hash)))
             }
             Err(e) => {
-                error!("Failed to fetch block {}: {}", current_height, e);
+                error!("Failed to fetch block {}: {}", fetch_height, e);
                 Err(e.into())
             }
         }
+    }
+
+
+    /// Install an opt-in chain-validation policy.
+    ///
+    /// Replaces the built-in continuity check for every subsequent
+    /// block. Call before starting the sync loop.
+    pub fn set_validator(
+        &mut self,
+        validator: std::sync::Arc<dyn metashrew_validator_core::ChainValidator>,
+    ) {
+        self.validator = Some(validator);
     }
 
     /// Validate block chain continuity like a light client (SPV-style)
@@ -437,6 +479,50 @@ where
     async fn validate_block_connects(&self, height: u32, block_data: &[u8], provided_hash: &[u8]) -> SyncResult<bool> {
         use bitcoin::consensus::Encodable;
         use sha2::{Sha256, Digest};
+
+        // Opt-in policy takes over completely when configured. The
+        // inline checks below stay as the default so behaviour is
+        // unchanged for anyone who has not passed --enable-spv.
+        if let Some(validator) = &self.validator {
+            let req = metashrew_validator_core::ValidationRequest {
+                height,
+                header: block_data.get(..80).unwrap_or(block_data).to_vec(),
+                claimed_hash: {
+                    let mut h = [0u8; 32];
+                    if provided_hash.len() != 32 {
+                        error!(
+                            "\u{26a0} block {} was given a {}-byte hash, expected 32",
+                            height,
+                            provided_hash.len()
+                        );
+                        return Ok(false);
+                    }
+                    h.copy_from_slice(provided_hash);
+                    h
+                },
+                prev_hash: if height == 0 {
+                    None
+                } else {
+                    let storage = self.storage.read().await;
+                    let stored = storage.get_block_hash(height - 1).await?;
+                    drop(storage);
+                    match stored {
+                        Some(v) if v.len() == 32 => {
+                            let mut h = [0u8; 32];
+                            h.copy_from_slice(&v);
+                            Some(h)
+                        }
+                        _ => None,
+                    }
+                },
+            };
+
+            let verdict = validator.validate(&req);
+            if !verdict.accepted {
+                error!("\u{26a0} SPV REJECT at height {}: {}", height, verdict.reason);
+            }
+            return Ok(verdict.accepted);
+        }
 
         // Decode the block
         let block: bitcoin::Block = bitcoin::consensus::deserialize(block_data)
@@ -628,6 +714,29 @@ where
                         }
                         Err(commit_err) => {
                             let msg = format!("{}", commit_err);
+
+                            // An out-of-order rejection is DETERMINISTIC: it is a
+                            // function of the gap between `height` and the committed
+                            // tip, and re-executing the same block cannot change
+                            // either. Retrying it 30 times with backoff costs ~43
+                            // minutes per block (measured in production on 2026-08-24)
+                            // and, worse, DELAYS the resync signal reaching the caller,
+                            // which is the only thing that can actually fix it. Bail
+                            // immediately and let the result loop route it to
+                            // `handle_reorg`.
+                            if msg.contains("out-of-order commit rejected") {
+                                error!(
+                                    "Block {}: {} — not retryable (the committed tip \
+                                     cannot advance by re-executing this block); \
+                                     surfacing immediately for reorg handling",
+                                    height, msg
+                                );
+                                return Err(SyncError::Storage(format!(
+                                    "commit_atomic: {}",
+                                    msg
+                                )));
+                            }
+
                             log_atomic_retry_failure(
                                 "atomic commit",
                                 height,
@@ -848,8 +957,22 @@ where
                         processing_heights.remove(&failed_height);
                     }
 
-                    // Check if this is a chain validation error - trigger reorg handling
-                    if error.contains("does not connect to previous block") || error.contains("CHAIN DISCONTINUITY") {
+                    // Check if this is a chain validation error - trigger reorg handling.
+                    //
+                    // `out-of-order commit rejected` belongs here (added rc.15). It means
+                    // the fetcher cursor has drifted ahead of the committed storage tip:
+                    // `commit_atomic` only accepts `tip + 1`, so once a gap opens, every
+                    // later block is rejected for the same reason and the gap only widens.
+                    // Routing it to the generic retry branch (which does NOT rewind
+                    // `current_height`) made the divergence permanent — the wedge behind
+                    // INCIDENT-REORG-WEDGE-20260816 and -20260824. `handle_reorg` walks
+                    // back to the common ancestor and stores the rollback height, which is
+                    // exactly the reconciliation that previously required a process
+                    // restart (`heal_pointers_atomic` at startup).
+                    if error.contains("does not connect to previous block")
+                        || error.contains("CHAIN DISCONTINUITY")
+                        || error.contains("out-of-order commit rejected")
+                    {
                         warn!("Chain discontinuity detected at height {}. Triggering reorg handling.", failed_height);
 
                         // Trigger reorg handling to find common ancestor and rollback

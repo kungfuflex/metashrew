@@ -41,6 +41,25 @@
 use anyhow::Result;
 use clap::Parser;
 
+/// Route every allocation in this process through jemalloc.
+///
+/// This must live in the BINARY crate — a `#[global_allocator]` declared in a
+/// library has no effect on dependents, so putting it in `lib.rs` would be a
+/// no-op for the shipped `rockshrew-mono` executable.
+///
+/// The dependency is built with `unprefixed_malloc_on_supported_platforms`, so
+/// jemalloc also supplies the plain `malloc`/`free` symbols that the statically
+/// linked RocksDB C++ core and libstdc++'s `operator new` resolve against. The
+/// attribute below only covers Rust-side allocation; the unprefixed symbols are
+/// what capture RocksDB.
+///
+/// Verify on the built binary with:
+///   nm -D target/release/rockshrew-mono | grep -w ' T malloc'
+///   MALLOC_CONF=stats_print:true ./rockshrew-mono --help   # prints a jemalloc report
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 /// Initialize logging/tracing based on build features and environment
 fn init_tracing() {
     // Check if console debugging is requested via environment variable

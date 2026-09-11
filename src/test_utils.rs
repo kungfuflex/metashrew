@@ -25,16 +25,25 @@ impl TestConfig {
     }
 
     /// Create a new MetashrewRuntime for testing
-    pub async fn create_runtime(&self, engine: wasmtime::Engine) -> Result<MetashrewRuntime<MemStoreAdapter>> {
-        MetashrewRuntime::new(self.wasm, MemStoreAdapter::new(), engine).await
+    ///
+    /// The `_engine` parameter is retained for source compatibility with the
+    /// ~33 existing call sites but is deliberately IGNORED. Since
+    /// `fix(runtime): guarantee deterministic engine flags via indexer_config()`
+    /// the runtime builds both engines internally from `indexer_config()`, and
+    /// a caller-supplied bare-defaults engine is exactly the defect that commit
+    /// removed. Tests therefore exercise the same deterministic engine
+    /// configuration production uses.
+    pub async fn create_runtime(&self, _engine: wasmtime::Engine) -> Result<MetashrewRuntime<MemStoreAdapter>> {
+        MetashrewRuntime::new(self.wasm, MemStoreAdapter::new()).await
     }
 
+    /// See `create_runtime` — `_engine` is accepted and ignored for the same reason.
     pub async fn create_runtime_from_adapter<T: KeyValueStoreLike + Clone + Send + Sync + 'static>(
         &self,
         store: T,
-        engine: wasmtime::Engine,
+        _engine: wasmtime::Engine,
     ) -> Result<MetashrewRuntime<T>> where <T as KeyValueStoreLike>::Batch: Send {
-        MetashrewRuntime::new(self.wasm, store, engine).await
+        MetashrewRuntime::new(self.wasm, store).await
     }
 }
 

@@ -64,6 +64,68 @@ pub struct BlockHashResponse {
     pub error: Option<Value>,
 }
 
+/// Environment escape hatch for [`verify_block_hash`].
+///
+/// Set `METASHREW_SKIP_BLOCK_HASH_VERIFY=1` for a chain whose block
+/// identity is not `sha256d` over an 80-byte header.
+const SKIP_VERIFY_ENV: &str = "METASHREW_SKIP_BLOCK_HASH_VERIFY";
+
+/// Check that a block body actually hashes to the hash we asked for.
+///
+/// The node is told "give me the block at height H"; it answers with a
+/// hash and then a body. Nothing previously connected the two — the
+/// indexer took both on trust. Since the body is already in hand, the
+/// hash is a double-SHA256 of its first 80 bytes away, so checking is
+/// free and strictly stronger than asking.
+///
+/// This is the cheapest possible piece of the SPV argument: it does not
+/// prove the chain, but it does mean a body cannot be silently swapped
+/// for one at a different height, which is precisely the substitution a
+/// remote or proxied node is in a position to make.
+///
+/// Block *identity* is `sha256d(header)` on essentially every
+/// bitcoin-derived chain even where proof-of-work is not (litecoin's
+/// scrypt, auxpow chains' merged mining) — auxpow data trails the
+/// 80-byte header rather than replacing it. A chain that departs from
+/// that can opt out via [`SKIP_VERIFY_ENV`]; the error names the
+/// variable so the failure is self-explaining rather than mysterious.
+pub fn verify_block_hash(height: u32, expected: &[u8], data: &[u8]) -> SyncResult<()> {
+    if std::env::var(SKIP_VERIFY_ENV).is_ok() {
+        return Ok(());
+    }
+    if data.len() < 80 {
+        return Err(SyncError::BitcoinNode(format!(
+            "block {} body is {} bytes, too short to contain a header",
+            height,
+            data.len()
+        )));
+    }
+    let computed = double_sha256(&data[..80]);
+    if computed.as_slice() != expected {
+        return Err(SyncError::BitcoinNode(format!(
+            "block {} body does not match the hash the node gave for that height \
+             (expected {}, body hashes to {}). If this chain does not use \
+             sha256d over an 80-byte header, set {}=1.",
+            height,
+            hex::encode(expected),
+            hex::encode(computed),
+            SKIP_VERIFY_ENV,
+        )));
+    }
+    Ok(())
+}
+
+/// `sha256d`, in the same internal byte order bitcoind's `getblockhash`
+/// returns (i.e. not reversed for display).
+fn double_sha256(bytes: &[u8]) -> Vec<u8> {
+    use sha2::{Digest, Sha256};
+    let first = Sha256::digest(bytes);
+    let second = Sha256::digest(first);
+    let mut out = second.to_vec();
+    out.reverse();
+    out
+}
+
 /// Bitcoin node adapter that connects to a real Bitcoin node via RPC.
 #[derive(Clone)]
 pub struct BitcoinRpcAdapter {
@@ -88,6 +150,24 @@ impl BitcoinRpcAdapter {
             tunnel_config,
             active_tunnel: Arc::new(tokio::sync::Mutex::new(None)),
         }
+    }
+
+    /// Fetch a block body by hash, skipping the height->hash lookup the
+    /// caller has already done.
+    async fn get_block_data_by_hash(&self, blockhash: &[u8]) -> SyncResult<Vec<u8>> {
+        let params = vec![
+            Value::String(hex::encode(blockhash)),
+            Value::Number(Number::from(0)),
+        ];
+        let response: BlockHashResponse = self
+            .request_with_retry("getblock", params)
+            .await
+            .map_err(|e| SyncError::BitcoinNode(e.to_string()))?;
+        let block_hex = response
+            .result
+            .ok_or_else(|| SyncError::BitcoinNode("missing result".to_string()))?;
+        hex::decode(block_hex)
+            .map_err(|e| SyncError::BitcoinNode(format!("Hex decode error: {}", e)))
     }
 
     async fn request_with_retry<T: DeserializeOwned>(&self, method: &str, params: Vec<Value>) -> Result<T> {
@@ -200,24 +280,20 @@ impl BitcoinNodeAdapter for BitcoinRpcAdapter {
 
     async fn get_block_data(&self, height: u32) -> SyncResult<Vec<u8>> {
         let blockhash = self.get_block_hash(height).await?;
-        let params = vec![
-            Value::String(hex::encode(&blockhash)),
-            Value::Number(Number::from(0)),
-        ];
-        let response: BlockHashResponse = self
-            .request_with_retry("getblock", params)
-            .await
-            .map_err(|e| SyncError::BitcoinNode(e.to_string()))?;
-        let block_hex = response
-            .result
-            .ok_or_else(|| SyncError::BitcoinNode("missing result".to_string()))?;
-        hex::decode(block_hex)
-            .map_err(|e| SyncError::BitcoinNode(format!("Hex decode error: {}", e)))
+        self.get_block_data_by_hash(&blockhash).await
     }
 
     async fn get_block_info(&self, height: u32) -> SyncResult<BlockInfo> {
+        // One `getblockhash`, not two.
+        //
+        // This used to call `get_block_hash` and then `get_block_data`,
+        // which called `get_block_hash` again for the same height — so a
+        // third of every block's RPC traffic was a verbatim repeat of the
+        // call made one line earlier. On a remote node that is a whole
+        // round-trip of latency per block, for nothing.
         let hash = self.get_block_hash(height).await?;
-        let data = self.get_block_data(height).await?;
+        let data = self.get_block_data_by_hash(&hash).await?;
+        verify_block_hash(height, &hash, &data)?;
         Ok(BlockInfo { height, hash, data })
     }
 
@@ -357,5 +433,52 @@ where
             blocks_processed,
             last_refresh_height: Some(blocks_processed),
         })
+    }
+}
+#[cfg(test)]
+mod block_hash_tests {
+    use super::*;
+
+    /// Real signet block 1: the first 80 bytes of its body, and the hash
+    /// bitcoind reports for height 1.
+    const SIGNET_BLOCK_1_HEADER: &str = "00000020f61eee3b63a380a477a063af32b2bbc97c9ff9f01f2c\
+4225e973988108000000f575c83235984e7dc4afc1f30944c170462e84437ab6f2d52e16878a79e4678bd1914d5fae7\
+7031eccf40700";
+    const SIGNET_BLOCK_1_HASH: &str =
+        "00000086d6b2636cb2a392d45edc4ec544a10024d30141c9adf4bfd9de533b53";
+
+    fn header() -> Vec<u8> {
+        hex::decode(SIGNET_BLOCK_1_HEADER.replace('\n', "")).unwrap()
+    }
+
+    #[test]
+    fn a_real_block_body_verifies_against_its_hash() {
+        let mut body = header();
+        // Trailing transaction bytes must not affect the hash.
+        body.extend_from_slice(&[0xab; 249]);
+        let hash = hex::decode(SIGNET_BLOCK_1_HASH).unwrap();
+        assert!(verify_block_hash(1, &hash, &body).is_ok());
+    }
+
+    #[test]
+    fn a_body_from_a_different_block_is_rejected() {
+        let mut body = header();
+        body[4] ^= 0xff; // perturb prev_blockhash
+        let hash = hex::decode(SIGNET_BLOCK_1_HASH).unwrap();
+        let err = verify_block_hash(1, &hash, &body).unwrap_err().to_string();
+        assert!(err.contains("does not match"), "{err}");
+        assert!(err.contains(SKIP_VERIFY_ENV), "error must name the escape hatch: {err}");
+    }
+
+    #[test]
+    fn a_truncated_body_is_rejected_rather_than_panicking() {
+        let hash = hex::decode(SIGNET_BLOCK_1_HASH).unwrap();
+        assert!(verify_block_hash(1, &hash, &[0u8; 79]).is_err());
+        assert!(verify_block_hash(1, &hash, &[]).is_err());
+    }
+
+    #[test]
+    fn double_sha256_matches_the_published_block_hash() {
+        assert_eq!(hex::encode(double_sha256(&header())), SIGNET_BLOCK_1_HASH);
     }
 }
