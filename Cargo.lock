@@ -2760,7 +2760,7 @@ dependencies = [
 
 [[package]]
 name = "memshrew-p2p"
-version = "9.0.5-rc.14"
+version = "9.0.5-rc.16"
 dependencies = [
  "actix-cors",
  "actix-web",
@@ -2781,7 +2781,7 @@ dependencies = [
 
 [[package]]
 name = "memshrew-runtime"
-version = "9.0.5-rc.14"
+version = "9.0.5-rc.16"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2793,7 +2793,7 @@ dependencies = [
 
 [[package]]
 name = "metashrew-core"
-version = "9.0.5-rc.14"
+version = "9.0.5-rc.16"
 dependencies = [
  "anyhow",
  "bitcoin 0.31.3",
@@ -2810,7 +2810,7 @@ dependencies = [
 
 [[package]]
 name = "metashrew-memory-stress"
-version = "9.0.5-rc.14"
+version = "9.0.5-rc.16"
 dependencies = [
  "bitcoin 0.32.8",
  "metashrew-core",
@@ -2819,7 +2819,7 @@ dependencies = [
 
 [[package]]
 name = "metashrew-minimal"
-version = "9.0.5-rc.14"
+version = "9.0.5-rc.16"
 dependencies = [
  "anyhow",
  "bitcoin 0.32.8",
@@ -2830,7 +2830,7 @@ dependencies = [
 
 [[package]]
 name = "metashrew-runtime"
-version = "9.0.5-rc.14"
+version = "9.0.5-rc.16"
 dependencies = [
  "anyhow",
  "hex",
@@ -2847,7 +2847,7 @@ dependencies = [
 
 [[package]]
 name = "metashrew-support"
-version = "9.0.5-rc.14"
+version = "9.0.5-rc.16"
 dependencies = [
  "anyhow",
  "bech32 0.11.1",
@@ -2859,7 +2859,7 @@ dependencies = [
 
 [[package]]
 name = "metashrew-sync"
-version = "9.0.5-rc.14"
+version = "9.0.5-rc.16"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2910,7 +2910,7 @@ dependencies = [
 
 [[package]]
 name = "metashrew-validator-core"
-version = "9.0.5-rc.14"
+version = "9.0.5-rc.16"
 dependencies = [
  "anyhow",
  "bitcoin 0.32.8",
@@ -3847,7 +3847,7 @@ dependencies = [
 
 [[package]]
 name = "rockshrew-diff"
-version = "9.0.5-rc.14"
+version = "9.0.5-rc.16"
 dependencies = [
  "anyhow",
  "clap",
@@ -3856,7 +3856,7 @@ dependencies = [
 
 [[package]]
 name = "rockshrew-mono"
-version = "9.0.5-rc.14"
+version = "9.0.5-rc.16"
 dependencies = [
  "actix-cors",
  "actix-web",
@@ -3902,7 +3902,7 @@ dependencies = [
 
 [[package]]
 name = "rockshrew-runtime"
-version = "9.0.5-rc.14"
+version = "9.0.5-rc.16"
 dependencies = [
  "anyhow",
  "async-trait",
