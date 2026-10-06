@@ -217,6 +217,21 @@ pub(crate) fn near_tip_should_drop(last_sent: i64, candidate_height: u32) -> boo
     candidate_height < near_tip_min_send_height(last_sent)
 }
 
+/// v9.0.5-rc.16: which processor errors the indexer loop must answer with a
+/// cursor resync (`resync_cursor_to_storage_tip` + `last_sent_height` reset)
+/// rather than a plain sleep-and-continue.
+///
+/// "out-of-order commit rejected" belongs here: `commit_atomic` only accepts
+/// `tip + 1`, so once the fetcher cursor is ahead of the on-disk tip every
+/// later block is rejected for the same reason. rc.15 added it to the
+/// metashrew-sync result loop, which rockshrew-mono does not use; without it
+/// here the gap persisted until a restart (INCIDENT-REORG-WEDGE-20260824).
+pub(crate) fn is_resync_error(error_str: &str) -> bool {
+    error_str.contains("does not connect to previous block")
+        || error_str.contains("CHAIN DISCONTINUITY")
+        || error_str.contains("out-of-order commit rejected")
+}
+
 /// Command-line arguments for `rockshrew-mono`.
 #[derive(Parser, Debug, Clone)]
 #[command(version, about, long_about = None)]
@@ -1386,20 +1401,20 @@ where
                 BlockResult::Error(height, error) => {
                     let error_str = error.to_string();
 
-                    // Check if this is a chain validation error - trigger reorg handling
-                    if error_str.contains("does not connect to previous block") || error_str.contains("CHAIN DISCONTINUITY") {
+                    // Chain validation errors and out-of-order commits both
+                    // mean the cursor no longer matches storage — resync.
+                    if is_resync_error(&error_str) {
                         warn!("Chain discontinuity at height {}. Triggering reorg.", height);
 
+                        // v9.0.5-rc.16: re-anchor the engine cursor to the
+                        // on-disk tip before reorg detection. Previously this
+                        // called `handle_reorg(height, ..)` and discarded the
+                        // result, so the engine's `current_height` was never
+                        // lowered — and for an out-of-order rejection
+                        // `handle_reorg` returns `height` itself, leaving the
+                        // fetcher ahead of disk until a restart.
                         let engine = sync_engine_clone.read().await;
-                        match metashrew_sync::sync::handle_reorg(
-                            height,
-                            engine.node().clone(),
-                            engine.storage().clone(),
-                            engine.runtime().clone(),
-                            &engine.config,
-                        )
-                        .await
-                        {
+                        match engine.resync_cursor_to_storage_tip().await {
                             Ok(rollback_height) => {
                                 info!("Rolled back to height {}. Resuming sync.", rollback_height);
                                 // v9.0.5-rc.6: rollback dropped the
