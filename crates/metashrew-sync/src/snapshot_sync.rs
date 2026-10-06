@@ -171,6 +171,52 @@ where
         self.current_height.load(Ordering::SeqCst)
     }
 
+    /// v9.0.5-rc.16: re-anchor the in-memory cursor to the ON-DISK tip, then
+    /// run reorg detection from there. Returns the next height to process.
+    ///
+    /// This is the runtime equivalent of what `init` (via startup-heal) does
+    /// at process start. Calling `handle_reorg(failed_height, ..)` alone does
+    /// not rewind a cursor that has drifted ahead of disk: it walks back from
+    /// `failed_height - 1`, skips the heights with no local hash (the gap
+    /// itself), and — absent a real reorg — returns `failed_height`
+    /// unchanged, so every later block is rejected for the same reason.
+    ///
+    /// Anchoring at the on-disk tip + 1 first closes the gap whether or not
+    /// a reorg actually happened; `handle_reorg` then rolls back further
+    /// only if the chain below the tip diverged.
+    pub async fn resync_cursor_to_storage_tip(&self) -> SyncResult<u32> {
+        let indexed_height = {
+            let storage = self.storage.read().await;
+            storage.get_indexed_height().await?
+        };
+        // Same start-height rule as `init`.
+        let anchor = if self.config.start_block > 0 && self.config.start_block > indexed_height {
+            self.config.start_block
+        } else if indexed_height > 0 {
+            indexed_height + 1
+        } else {
+            self.config.start_block
+        };
+
+        let next_height = crate::sync::handle_reorg(
+            anchor,
+            self.node.clone(),
+            self.storage.clone(),
+            self.runtime.clone(),
+            &self.config,
+        )
+        .await?;
+
+        let previous = self.current_height.swap(next_height, Ordering::SeqCst);
+        if previous != next_height {
+            warn!(
+                "resync: cursor moved {} -> {} (on-disk tip {})",
+                previous, next_height, indexed_height
+            );
+        }
+        Ok(next_height)
+    }
+
     /// Get a reference to the node adapter
     pub fn node(&self) -> &Arc<N> {
         &self.node

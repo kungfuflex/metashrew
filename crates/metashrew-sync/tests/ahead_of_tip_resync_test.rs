@@ -133,3 +133,82 @@ async fn block_ahead_of_tip_fails_fast_instead_of_burning_the_retry_budget() {
          tip, and every retry delays the resync signal that would fix it."
     );
 }
+
+// ---------------------------------------------------------------------------
+// v9.0.5-rc.16: failing fast is only half the fix — the cursor must REWIND.
+// ---------------------------------------------------------------------------
+
+/// Node whose hashes match what `warm_storage_to_tip` wrote, up to `tip`.
+fn node_matching_storage(tip: u32) -> MockBitcoinNode {
+    let node = MockBitcoinNode::new();
+    for h in 0..=tip {
+        node.add_block(h, vec![h as u8; 32], vec![0u8; 80]);
+    }
+    node
+}
+
+/// Cursor ahead of the on-disk tip with no real reorg: the shape
+/// `handle_reorg(failed_height, ..)` alone cannot fix, because it skips the
+/// gap heights (no local hash), finds a matching ancestor, and returns
+/// `failed_height` unchanged.
+#[tokio::test]
+async fn resync_rewinds_cursor_ahead_of_disk_without_a_reorg() {
+    let mut storage = MockStorage::new();
+    warm_storage_to_tip(&mut storage, 100).await;
+    let sync = SnapshotMetashrewSync::new(
+        node_matching_storage(110),
+        storage,
+        MockRuntime::new(),
+        test_config(),
+        SyncMode::Normal,
+    );
+    sync.init().await;
+    assert_eq!(sync.current_height(), 101);
+
+    // Disk falls behind the cursor: tip 96, cursor still 101.
+    sync.storage().write().await.rollback_to_height(96).await.unwrap();
+
+    // Pre-rc.16 recovery: no rewind.
+    let via_handle_reorg = metashrew_sync::sync::handle_reorg(
+        101,
+        sync.node().clone(),
+        sync.storage().clone(),
+        sync.runtime().clone(),
+        &sync.config,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        via_handle_reorg, 101,
+        "precondition: handle_reorg from the failed height does not close the gap"
+    );
+
+    let next = sync.resync_cursor_to_storage_tip().await.unwrap();
+    assert_eq!(next, 97, "resync must anchor at on-disk tip + 1");
+    assert_eq!(sync.current_height(), 97, "resync must store the rewound cursor");
+}
+
+/// A real reorg below the on-disk tip: resync still rolls back to the
+/// common ancestor, not just to tip + 1.
+#[tokio::test]
+async fn resync_still_rolls_back_a_real_reorg_below_the_tip() {
+    let mut storage = MockStorage::new();
+    warm_storage_to_tip(&mut storage, 100).await;
+    let node = node_matching_storage(110);
+    // Remote chain diverged at 99 and 100.
+    node.add_block(99, vec![0xAA; 32], vec![0u8; 80]);
+    node.add_block(100, vec![0xBB; 32], vec![0u8; 80]);
+    let sync = SnapshotMetashrewSync::new(
+        node,
+        storage,
+        MockRuntime::new(),
+        test_config(),
+        SyncMode::Normal,
+    );
+    sync.init().await;
+
+    let next = sync.resync_cursor_to_storage_tip().await.unwrap();
+    assert_eq!(next, 99, "common ancestor is 98, so resume at 99");
+    assert_eq!(sync.current_height(), 99);
+    assert_eq!(sync.get_height().await.unwrap(), 98, "storage rolled back to ancestor");
+}
