@@ -1,6 +1,6 @@
 [package]
 name = "metashrew-validator-core"
-version = "9.0.5-rc.14"
+version = "9.0.5-rc.16"
 edition = "2021"
 description = "Chain-validation policies for metashrew: built-in native validators plus the ABI for custom wasm ones"
 
