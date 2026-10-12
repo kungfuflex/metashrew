@@ -1858,7 +1858,17 @@ impl<T: KeyValueStoreLike + Clone + Send + Sync + 'static> MetashrewRuntime<T> {
             MetashrewRuntimeContext::new(db, height, vec![]),
         ));
         {
-            wasmstore.limiter(|state| &mut state.limits)
+            wasmstore.limiter(|state| &mut state.limits);
+            // The view engine meters fuel, and since wasmtime 49 instantiation
+            // itself consumes fuel (constant expressions such as data-segment
+            // offsets and global initialisers, and the start-function call, are
+            // charged). A fresh store has 0 fuel, so without this every view
+            // trapped with "all fuel consumed" while instantiating; under
+            // wasmtime 43 instantiation was free. The caller resets fuel to
+            // u64::MAX before running the view function, so the fuel the view
+            // itself gets is unchanged. `let _`: an engine without fuel
+            // enabled rejects set_fuel, and then needs none.
+            let _ = wasmstore.set_fuel(u64::MAX);
         }
         {
             Self::setup_linker(context.clone(), &mut linker)

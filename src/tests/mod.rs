@@ -12,3 +12,4 @@ pub mod reorg_exhaustive_test;
 pub mod reorg_focused_test;
 pub mod reorg_rollback_bug_test;
 pub mod start_block_test;
+pub mod view_fuel_test;
