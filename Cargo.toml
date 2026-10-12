@@ -21,7 +21,7 @@ sha2 = "0.10"
 # Root package for running tests
 [package]
 name = "metashrew-tests"
-version = "9.0.1-rc.2"
+version = "9.1.0-rc.1"
 edition = "2021"
 
 [dependencies]
