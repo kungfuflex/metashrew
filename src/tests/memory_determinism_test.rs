@@ -69,8 +69,8 @@ async fn run_memory_stress_test(config: MemoryStressConfig) -> Result<String> {
     // Max 4GB (WASM32 limit), but host constraints may prevent reaching this
     config_engine.max_wasm_stack(1024 * 1024); // 1MB stack
 
-    let engine = wasmtime::Engine::new(&config_engine)?;
-    let runtime = MetashrewRuntime::new(&wasm_bytes, storage.clone(), engine).await?;
+    let _engine = wasmtime::Engine::new(&config_engine)?;
+    let runtime = MetashrewRuntime::new(&wasm_bytes, storage.clone()).await?;
 
     // Prepare input
     let input_bytes = config.to_input_bytes();
@@ -82,7 +82,7 @@ async fn run_memory_stress_test(config: MemoryStressConfig) -> Result<String> {
 
     // Set input in context
     {
-        let mut context = runtime.context.write().await;
+        let mut context = runtime.context.write().unwrap();
         context.block = input_bytes;
         context.height = config.height;
         context.db.set_height(config.height);

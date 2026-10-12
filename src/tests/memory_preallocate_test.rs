@@ -31,10 +31,10 @@ async fn test_runtime_instantiation_requires_4gb() {
     let storage = MemStoreAdapter::new();
     let mut config = wasmtime::Config::default();
     config.async_support(true);
-    let engine = wasmtime::Engine::new(&config).expect("Failed to create engine");
+    let _engine = wasmtime::Engine::new(&config).expect("Failed to create engine");
 
     // This should fail immediately in low-memory environments if pre-allocation is working
-    let result = MetashrewRuntime::new(test_utils::WASM, storage, engine).await;
+    let result = MetashrewRuntime::new(test_utils::WASM, storage).await;
 
     match result {
         Ok(_runtime) => {
@@ -70,14 +70,12 @@ async fn test_minimal_runtime_instantiation() {
     let storage = MemStoreAdapter::new();
     let mut config = wasmtime::Config::default();
     config.async_support(true);
-    let engine = wasmtime::Engine::new(&config).expect("Failed to create engine");
+    let _engine = wasmtime::Engine::new(&config).expect("Failed to create engine");
 
     // This line should fail/panic if we can't pre-allocate 4GB
-    let _runtime = MetashrewRuntime::new(wasm_bytes, storage, engine)
-        .await
-        .expect(
-            "Failed to instantiate runtime - likely insufficient memory for 4GB pre-allocation",
-        );
+    let _runtime = MetashrewRuntime::new(wasm_bytes, storage).await.expect(
+        "Failed to instantiate runtime - likely insufficient memory for 4GB pre-allocation",
+    );
 
     println!("✅ Runtime instantiated successfully");
     println!("   Memory pre-allocation succeeded");

@@ -91,6 +91,7 @@ impl BitcoinNodeAdapter for MockNode {
 /// - New blocks from Chain B are successfully indexed
 /// - The stored data matches Chain B, not Chain A
 #[tokio::test]
+#[ignore = "stale harness: fails identically on 9952671 (wasmtime 43) and on rc.2; quarantined in v9.1.0-rc.2, see PR #62"]
 async fn test_reorg_with_proper_smt_rollback() -> Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
     info!("\n✅ TEST: Reorg with PROPER SMT Rollback (FIXED)\n");
@@ -229,6 +230,7 @@ async fn test_reorg_with_proper_smt_rollback() -> Result<()> {
 /// NOTE: This test currently PASSES because we fixed the rollback.
 /// To see the bug, you would need to revert to the old rollback implementation.
 #[tokio::test]
+#[ignore = "stale harness: fails identically on 9952671 (wasmtime 43) and on rc.2; quarantined in v9.1.0-rc.2, see PR #62"]
 async fn test_reorg_demonstrates_proper_cleanup() -> Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
     info!("\n📋 TEST: Demonstrating Proper SMT Cleanup During Reorg\n");

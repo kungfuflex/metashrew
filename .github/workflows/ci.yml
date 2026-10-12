@@ -6,127 +6,126 @@ on:
   pull_request:
     branches: [ main, master, develop ]
 
+# Read-only token for every job; nothing here publishes or needs secrets.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
+# Third-party actions are pinned by full commit SHA (tag in the comment).
+# The Rust toolchain is the one pinned in rust-toolchain.toml; rustup on the
+# runner installs it with its components and targets.
+
 jobs:
   test:
-    name: Test Suite
+    name: Test Suite (stable)
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        rust:
-          - stable
-          - beta
-          - nightly
-        include:
-          - rust: stable
-            can-fail: false
-          - rust: beta
-            can-fail: false
-          - rust: nightly
-            can-fail: true
-    continue-on-error: ${{ matrix.can-fail }}
-    
+    timeout-minutes: 120
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Install protoc
-      run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@master
-      with:
-        toolchain: ${{ matrix.rust }}
-        components: rustfmt, clippy
-        
-    - name: Cache cargo registry
-      uses: actions/cache@v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential pkg-config libssl-dev libclang-dev clang protobuf-compiler
+
+    - name: Install Rust toolchain (rust-toolchain.toml)
+      run: |
+        rustup toolchain install
+        rustc --version
+        cargo --version
+
+    - name: Cache cargo registry and target
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
           target
-        key: ${{ runner.os }}-cargo-${{ matrix.rust }}-${{ hashFiles('**/Cargo.lock') }}
+        key: ${{ runner.os }}-cargo-test-${{ hashFiles('rust-toolchain.toml', '**/Cargo.lock') }}
         restore-keys: |
-          ${{ runner.os }}-cargo-${{ matrix.rust }}-
-          ${{ runner.os }}-cargo-
-          
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          build-essential \
-          pkg-config \
-          libssl-dev \
-          libclang-dev \
-          clang
-          
+          ${{ runner.os }}-cargo-test-
+
     - name: Check formatting
-      if: matrix.rust == 'stable'
       run: cargo fmt --all -- --check
-      
+
     - name: Run clippy
-      if: matrix.rust == 'stable'
-      run: cargo clippy --all-targets --all-features
-      
-    - name: Build project
-      run: cargo build --verbose --all-features
-      
-    - name: Run tests
-      run: cargo test --verbose --all-features
-      
-    - name: Run doc tests
-      run: cargo test --doc --verbose --all-features
+      run: cargo clippy --workspace --all-targets --locked
+
+    # The non-default ssh-tunnel feature is not built for production, but it
+    # must keep compiling.
+    - name: Run clippy (rockshrew-mono --features ssh-tunnel)
+      run: cargo clippy -p rockshrew-mono --features ssh-tunnel --all-targets --locked
+
+    - name: Build workspace
+      run: cargo build --workspace --locked
+
+    # Tests share process-global state (the metashrew KV singleton, global
+    # allocator probes), so they run single-threaded.
+    - name: Run tests (incl. doc tests)
+      run: cargo test --workspace --locked -- --test-threads=1
 
   security-audit:
     name: Security Audit
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
-      
-    - name: Install cargo-audit
-      run: cargo install cargo-audit
-      
-    - name: Run security audit
-      run: cargo audit
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Install Rust toolchain (rust-toolchain.toml)
+      run: rustup toolchain install
+
+    # Release binary, verified against a pinned sha256 (no `cargo install`,
+    # no third-party action).
+    - name: Install cargo-deny 0.20.2
+      run: |
+        V=0.20.2
+        SHA256=9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
+        F=cargo-deny-$V-x86_64-unknown-linux-musl
+        curl -sSfL --retry 5 -o /tmp/$F.tar.gz \
+          https://github.com/EmbarkStudios/cargo-deny/releases/download/$V/$F.tar.gz
+        echo "$SHA256  /tmp/$F.tar.gz" | sha256sum -c -
+        tar xzf /tmp/$F.tar.gz -C /tmp
+        install -m 0755 /tmp/$F/cargo-deny ~/.cargo/bin/cargo-deny
+        cargo deny --version
+
+    # advisories + bans + sources, default features (= the production
+    # binary). Ignore list and bans: deny.toml.
+    - name: cargo deny
+      run: cargo deny --workspace --locked check advisories bans sources
 
   coverage:
     name: Code Coverage
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        components: llvm-tools-preview
-        
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y \
-          build-essential \
-          pkg-config \
-          libssl-dev \
-          libclang-dev \
-          clang
-          
+        sudo apt-get install -y build-essential pkg-config libssl-dev libclang-dev clang protobuf-compiler
+
+    - name: Install Rust toolchain (rust-toolchain.toml)
+      run: |
+        rustup toolchain install
+        rustup component add llvm-tools-preview
+
     - name: Install cargo-llvm-cov
-      uses: taiki-e/install-action@cargo-llvm-cov
-      
+      uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+      with:
+        tool: cargo-llvm-cov
+
     - name: Generate code coverage
-      run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
-      
+      run: cargo llvm-cov --workspace --locked --lcov --output-path lcov.info -- --test-threads=1
+
     - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v4
+      uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
       with:
         files: lcov.info
         fail_ci_if_error: false
@@ -136,49 +135,45 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     needs: [test, security-audit]
+    timeout-minutes: 60
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
-      
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y \
-          build-essential \
-          pkg-config \
-          libssl-dev \
-          libclang-dev \
-          clang
-          
+        sudo apt-get install -y build-essential pkg-config libssl-dev libclang-dev clang protobuf-compiler
+
+    - name: Install Rust toolchain (rust-toolchain.toml)
+      run: rustup toolchain install
+
     - name: Build release
-      run: cargo build --release --all-features
-      
+      run: cargo build --release --locked -p rockshrew-mono
+
+    - name: Record checksums
+      run: sha256sum target/release/rockshrew-mono target/release/rockshrew-rollback | tee SHA256SUMS
+
     - name: Upload release artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: metashrew-release-${{ github.sha }}
         path: |
           target/release/rockshrew-mono
-          target/release/rockshrew
-          target/release/rockshrew-view
+          target/release/rockshrew-rollback
+          SHA256SUMS
         retention-days: 30
 
   docker-build:
     name: Docker Build Test
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
+    timeout-minutes: 60
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-      
-    - name: Test Docker build (indexer)
-      run: docker build -f docker/Dockerfile.indexer -t metashrew-indexer:test .
-      
-    - name: Test Docker build (view)
-      run: docker build -f docker/Dockerfile.view -t metashrew-view:test .
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Build rockshrew-mono image (docker/Dockerfile.indexer)
+      run: docker build -f docker/Dockerfile.indexer -t rockshrew-mono:test .
+
+    - name: Smoke test
+      run: docker run --rm rockshrew-mono:test --help

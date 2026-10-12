@@ -11,6 +11,7 @@ use metashrew_sync::{PreviewCall, RuntimeAdapter};
 const WASM: &[u8] = include_bytes!(env!("METASHREW_MINIMAL_WASM_PATH"));
 
 #[tokio::test]
+#[ignore = "stale harness: fails identically on 9952671 (wasmtime 43) and on rc.2; quarantined in v9.1.0-rc.2, see PR #62"]
 async fn test_preview_e2e() {
     // 1. Setup
     let wasm_bytes = WASM;

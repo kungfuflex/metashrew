@@ -1,2 +1,9 @@
 [toolchain]
-channel = "stable"
+# Pinned for reproducible builds: `channel = "stable"` made every build
+# (including the production image, whose rust:1.90 base honours this file)
+# use whatever stable was current that day. Bump deliberately, together
+# with the CI cache key. wasmtime 49 needs >= 1.96.
+channel = "1.99.0"
+components = ["rustfmt", "clippy"]
+# The root package's build.rs compiles metashrew-minimal to wasm for the tests.
+targets = ["wasm32-unknown-unknown"]

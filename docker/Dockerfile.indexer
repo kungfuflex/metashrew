@@ -1,14 +1,45 @@
-FROM debian:latest
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    curl \
-    git \
-    libclang-dev
-RUN curl https://sh.rustup.rs -sSf | bash -s -- -y
-RUN echo 'source $HOME/.cargo/env' >> $HOME/.bashrc
-WORKDIR /opt/metashrew
+# rockshrew-mono: the metashrew indexer binary.
+#
+# Reproducible-friendly: base images pinned by digest, the toolchain is the
+# one pinned in rust-toolchain.toml (the builder image already ships it, so
+# rustup downloads nothing), and the build uses `--locked` so Cargo.lock is
+# authoritative. No indexer wasm is baked in; mount one and pass --indexer.
+#
+#   docker build -f docker/Dockerfile.indexer -t rockshrew-mono .
+#   docker run -v /data:/data -v ./indexer.wasm:/metashrew/indexer.wasm \
+#     rockshrew-mono --daemon-rpc-url http://bitcoind:8332 --auth user:pass \
+#     --indexer /metashrew/indexer.wasm --db-path /data --host 0.0.0.0
+
+# rust:1.99.0-bookworm (2026-10-06)
+FROM rust:1.99.0-bookworm@sha256:114c7a4425406451c2866b6aafe69fe29b1b298832db1277d411ac73c82d04d6 AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        clang \
+        libclang-dev \
+        libssl-dev \
+        pkg-config \
+        protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
 COPY . .
-RUN bash -c 'source ~/.bashrc; cargo build --release'
-RUN bash -c 'ulimit -n $(ulimit -n -H)'
-COPY index/docker-entrypoint.sh /docker-entrypoint.sh
-CMD ["bash", "/docker-entrypoint.sh"]
+RUN cargo build --release --locked -p rockshrew-mono --bin rockshrew-mono
+
+# debian:bookworm-slim (2026-10-06)
+FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/target/release/rockshrew-mono /usr/local/bin/rockshrew-mono
+
+RUN useradd -r -s /bin/false metashrew \
+    && mkdir -p /data /metashrew \
+    && chown metashrew:metashrew /data /metashrew
+
+USER metashrew
+VOLUME /data
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/rockshrew-mono"]

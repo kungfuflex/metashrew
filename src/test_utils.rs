@@ -29,7 +29,11 @@ impl TestConfig {
         &self,
         engine: wasmtime::Engine,
     ) -> Result<MetashrewRuntime<MemStoreAdapter>> {
-        MetashrewRuntime::new(self.wasm, MemStoreAdapter::new(), engine).await
+        // `engine` is ignored: since v9.0.5 `MetashrewRuntime::new` builds its own
+        // indexer and view engines from `indexer_config()`/`view_config()`. The
+        // parameter is kept so existing tests compile unchanged.
+        let _ = engine;
+        MetashrewRuntime::new(self.wasm, MemStoreAdapter::new()).await
     }
 
     pub async fn create_runtime_from_adapter<T: KeyValueStoreLike + Clone + Send + Sync + 'static>(
@@ -40,7 +44,8 @@ impl TestConfig {
     where
         <T as KeyValueStoreLike>::Batch: Send,
     {
-        MetashrewRuntime::new(self.wasm, store, engine).await
+        let _ = engine; // see create_runtime
+        MetashrewRuntime::new(self.wasm, store).await
     }
 }
 

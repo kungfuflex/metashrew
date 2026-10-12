@@ -1,0 +1,53 @@
+# cargo-deny configuration. CI runs:
+#   cargo deny --workspace --locked check advisories bans sources
+# with the default feature set, which is what the production
+# rockshrew-mono binary is built with.
+#
+# Not covered by CI: the non-default `rockshrew-mono/ssh-tunnel` feature
+# (also enabled by `ssh_e2e_tests`). It pulls russh 0.50, which carries
+# RUSTSEC-2026-0153, RUSTSEC-2026-0154, RUSTSEC-2023-0071 (rsa, no fix)
+# and further GHSA-only advisories. Production uses plain http:// and
+# does not compile it. Upgrading russh to >= 0.60.3 or deleting the
+# feature is the follow-up; check it with
+#   cargo deny --workspace --all-features check advisories
+
+[graph]
+all-features = false
+no-default-features = false
+
+[advisories]
+# Every vulnerability, unsound, unmaintained and notice advisory fails
+# the job unless listed here with a reason.
+#
+# Ignore list: EMPTY. Nothing in the default-feature graph currently
+# needs an exception. Add entries only as
+#   { id = "RUSTSEC-YYYY-NNNN", reason = "why it cannot be fixed, and why it is not reachable" },
+ignore = []
+# A yanked crate in Cargo.lock is a warning, not a failure: yanks are
+# not security advisories and would otherwise break unrelated PRs.
+yanked = "warn"
+
+[bans]
+multiple-versions = "allow"
+# Workspace members depend on each other by path with no version, which
+# cargo-deny counts as wildcards (allow-wildcard-paths only covers
+# `publish = false` crates). There are no registry wildcards today.
+wildcards = "allow"
+# Regression guards for the rc.1 audit findings: none of these may come
+# back into the default-feature (production) graph. Ranges use `<=` on the
+# last affected version: cargo-deny 0.20 mis-matches `<` requirements
+# (checked: `h2@<0.5` did not match 0.4.20, `hyper@<1` matched 1.9.0).
+deny = [
+    { crate = "h2@<=0.4.15", reason = "RUSTSEC-2026-0258 (unbounded empty DATA frames); h2 0.3 has no fix" },
+    { crate = "hyper@<=0.14.99", reason = "hyper 0.14 is what pulled in h2 0.3" },
+    { crate = "actix-http@<=3.12.0", reason = "GHSA-xhj4-vrgc-hr34 (CL.TE request smuggling)" },
+    { crate = "wasmtime@<=48.0.3", reason = "17 RustSec advisories closed by 48.0.4 / 49.0.2" },
+    { crate = "russh", reason = "pre-auth advisories; allowed only behind the non-default ssh-tunnel feature" },
+    { crate = "russh-keys", reason = "see russh" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

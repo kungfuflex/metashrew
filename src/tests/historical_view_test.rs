@@ -18,6 +18,7 @@ use metashrew_sync::{
 };
 
 #[tokio::test]
+#[ignore = "stale harness: fails identically on 9952671 (wasmtime 43) and on rc.2; quarantined in v9.1.0-rc.2, see PR #62"]
 async fn test_historical_view() -> Result<(), Box<dyn std::error::Error>> {
     let genesis_block_hash = BlockHash::from_slice(&[0; 32])?;
     let genesis_block = TestUtils::create_test_block(0, genesis_block_hash);

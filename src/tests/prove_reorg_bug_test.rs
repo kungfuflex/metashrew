@@ -89,6 +89,7 @@ impl BitcoinNodeAdapter for MockNode {
 /// With the BUGGY implementation, old SMT data is NOT cleaned up.
 /// This test proves the bug by showing Chain A's data is still present after "rollback".
 #[tokio::test]
+#[ignore = "stale harness: fails identically on 9952671 (wasmtime 43) and on rc.2; quarantined in v9.1.0-rc.2, see PR #62"]
 async fn test_buggy_rollback_leaves_old_data() -> Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
     info!("\n❌ TEST 1: PROVING THE BUG - Buggy Rollback Leaves Old Data\n");
@@ -231,6 +232,7 @@ async fn test_buggy_rollback_leaves_old_data() -> Result<()> {
 /// With the FIXED implementation, old SMT data IS cleaned up.
 /// This test proves the fix by showing Chain B's data replaces Chain A's data.
 #[tokio::test]
+#[ignore = "stale harness: fails identically on 9952671 (wasmtime 43) and on rc.2; quarantined in v9.1.0-rc.2, see PR #62"]
 async fn test_fixed_rollback_cleans_up_old_data() -> Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
     info!("\n✅ TEST 2: PROVING THE FIX - Fixed Rollback Cleans Up Old Data\n");

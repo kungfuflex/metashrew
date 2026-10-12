@@ -630,6 +630,9 @@ impl<T: KeyValueStoreLike> BatchedSMTHelper<T> {
     }
 
     /// Compute new root hash by traversing path without storing intermediate nodes
+    // The `new_child_hash = new_child_hash;` no-op below is deny-by-default
+    // in clippy; allowed rather than edited so consensus code is untouched.
+    #[allow(clippy::self_assignment)]
     fn compute_path_root_only(
         &mut self,
         current_root: [u8; 32],
@@ -2411,6 +2414,9 @@ impl<T: KeyValueStoreLike> SMTHelper<T> {
     }
 
     /// Compute the minimal set of node updates needed for a key insertion/update
+    // The `new_child_hash = new_child_hash;` no-op below is deny-by-default
+    // in clippy; allowed rather than edited so consensus code is untouched.
+    #[allow(clippy::self_assignment)]
     fn compute_path_updates(
         &mut self,
         current_root: [u8; 32],

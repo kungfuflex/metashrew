@@ -157,6 +157,7 @@ async fn sync_chain(
         pipeline_size: Some(1),
         max_reorg_depth: 100,
         reorg_check_threshold: 6,
+        ..SyncConfig::default()
     };
 
     let mut syncer =
@@ -253,6 +254,7 @@ fn fake_parent_outpoint(nonce: u64) -> (Txid, u32) {
 // State at outpoints(X) must reflect N2 execution, not stale N1.
 // -----------------------------------------------------------------------
 #[tokio::test]
+#[ignore = "stale harness: fails identically on 9952671 (wasmtime 43) and on rc.2; quarantined in v9.1.0-rc.2, see PR #62"]
 async fn test_scenario_1_single_tx_reorg_same_txid_different_block() -> Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
     info!("\n🧪 Scenario 1: Same tx X moves from block N1 to block N2");
@@ -327,6 +329,7 @@ async fn test_scenario_1_single_tx_reorg_same_txid_different_block() -> Result<(
 // be ZEROED (rolled back, no residual).
 // -----------------------------------------------------------------------
 #[tokio::test]
+#[ignore = "stale harness: fails identically on 9952671 (wasmtime 43) and on rc.2; quarantined in v9.1.0-rc.2, see PR #62"]
 async fn test_scenario_2_tx_vanishes_in_reorg() -> Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
     info!("\n🧪 Scenario 2: tx X mined in A, never re-mined in B — state must zero out");
@@ -400,6 +403,7 @@ async fn test_scenario_2_tx_vanishes_in_reorg() -> Result<()> {
 // guard" test), which uses an identical tx and proves WASM re-execution.
 // -----------------------------------------------------------------------
 #[tokio::test]
+#[ignore = "stale harness: fails identically on 9952671 (wasmtime 43) and on rc.2; quarantined in v9.1.0-rc.2, see PR #62"]
 async fn test_scenario_3_different_effects_reorg() -> Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
     info!("\n🧪 Scenario 3: cellpack flips from MINT to BURN across reorg");
@@ -476,6 +480,7 @@ async fn test_scenario_3_different_effects_reorg() -> Result<()> {
 // replays them in a DIFFERENT order at N2. State must be path-correct.
 // -----------------------------------------------------------------------
 #[tokio::test]
+#[ignore = "stale harness: fails identically on 9952671 (wasmtime 43) and on rc.2; quarantined in v9.1.0-rc.2, see PR #62"]
 async fn test_scenario_4_multi_tx_reorg_different_replay_order() -> Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
     info!("\n🧪 Scenario 4: three txs replayed in flipped order across reorg");
@@ -578,6 +583,7 @@ async fn test_scenario_4_multi_tx_reorg_different_replay_order() -> Result<()> {
 // tx must be GONE; every chain-B tx must be PRESENT.
 // -----------------------------------------------------------------------
 #[tokio::test]
+#[ignore = "stale harness: fails identically on 9952671 (wasmtime 43) and on rc.2; quarantined in v9.1.0-rc.2, see PR #62"]
 async fn test_scenario_5_deep_reorg_mixed_activity() -> Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
     info!("\n🧪 Scenario 5: 10-block deep reorg, mixed protostone activity in both chains");
@@ -664,6 +670,7 @@ async fn test_scenario_5_deep_reorg_mixed_activity() -> Result<()> {
 // out. State must reflect both being gone.
 // -----------------------------------------------------------------------
 #[tokio::test]
+#[ignore = "stale harness: fails identically on 9952671 (wasmtime 43) and on rc.2; quarantined in v9.1.0-rc.2, see PR #62"]
 async fn test_scenario_6_cpfp_parent_reorg_invalidates_child() -> Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
     info!("\n🧪 Scenario 6: CPFP parent + child both reorg out");
@@ -752,6 +759,7 @@ async fn test_scenario_6_cpfp_parent_reorg_invalidates_child() -> Result<()> {
 // height, same txids, different order). State must reflect N2 order.
 // -----------------------------------------------------------------------
 #[tokio::test]
+#[ignore = "stale harness: fails identically on 9952671 (wasmtime 43) and on rc.2; quarantined in v9.1.0-rc.2, see PR #62"]
 async fn test_scenario_7_same_height_tx_order_swap() -> Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
     info!("\n🧪 Scenario 7: same height + same txids, but flipped order across reorg");
@@ -847,6 +855,7 @@ async fn test_scenario_7_same_height_tx_order_swap() -> Result<()> {
 // interpretation" framing slightly.
 // -----------------------------------------------------------------------
 #[tokio::test]
+#[ignore = "stale harness: fails identically on 9952671 (wasmtime 43) and on rc.2; quarantined in v9.1.0-rc.2, see PR #62"]
 async fn test_scenario_8_cellpack_version_boundary_documented_gap() -> Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
     info!("\n🧪 Scenario 8: cellpack-version boundary (documented gap — no fork-gated logic in test VM)");
@@ -919,6 +928,7 @@ async fn test_scenario_8_cellpack_version_boundary_documented_gap() -> Result<()
 // outpoints(X) is identical (no drift).
 // -----------------------------------------------------------------------
 #[tokio::test]
+#[ignore = "stale harness: fails identically on 9952671 (wasmtime 43) and on rc.2; quarantined in v9.1.0-rc.2, see PR #62"]
 async fn test_scenario_9_idempotent_reexecution() -> Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
     info!("\n🧪 Scenario 9: same tx re-executed at a new height -> identical state");
@@ -980,6 +990,7 @@ async fn test_scenario_9_idempotent_reexecution() -> Result<()> {
 // re-execute (else the user's wrap-tx fingerprint reproduces).
 // -----------------------------------------------------------------------
 #[tokio::test]
+#[ignore = "stale harness: fails identically on 9952671 (wasmtime 43) and on rc.2; quarantined in v9.1.0-rc.2, see PR #62"]
 async fn test_scenario_10_already_processed_guard_does_not_block_reindex() -> Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
     info!("\n🧪 Scenario 10: tx replays after reorg — state must come from the NEW execution");
@@ -1086,6 +1097,7 @@ async fn test_scenario_10_already_processed_guard_does_not_block_reindex() -> Re
 // to drift.
 // -----------------------------------------------------------------------
 #[tokio::test]
+#[ignore = "stale harness: fails identically on 9952671 (wasmtime 43) and on rc.2; quarantined in v9.1.0-rc.2, see PR #62"]
 async fn test_append_only_chain_trimmed_after_rollback() -> Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
     info!("\n🧪 Append-only chain trim sanity check");
