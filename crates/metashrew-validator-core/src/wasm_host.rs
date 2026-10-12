@@ -61,6 +61,14 @@ impl WasmValidator {
         let mut config = wasmtime::Config::default();
         config.cranelift_nan_canonicalization(true);
         config.relaxed_simd_deterministic(true);
+        // Proposal flags pinned to the wasmtime 43 defaults, as in
+        // metashrew-runtime's `indexer_config` (wasmtime 46-49 turned
+        // these on by default).
+        config.wasm_gc(false);
+        config.wasm_function_references(false);
+        config.wasm_exceptions(false);
+        config.wasm_wide_arithmetic(false);
+        config.wasm_component_model_async(false);
         // No async: validation is a synchronous call from the sync path.
         let engine = Engine::new(&config).map_err(|e| anyhow!("building validator engine: {e}"))?;
         let module =

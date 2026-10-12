@@ -88,8 +88,8 @@ pub const TIP_HEIGHT_KEY: &'static str = "/__INTERNAL/tip-height";
 /// metashrew indexer engine MUST use.
 ///
 /// This is the single source of truth: `MetashrewRuntime::{load,new}`
-/// call it to build both the indexer engine and (with two extra
-/// flags) the view engine. External crates that need to construct
+/// call it to build the indexer engine, and [`view_config`] builds the
+/// view engine on top of it. External crates that need to construct
 /// their own engine for testing or specialty use cases should call
 /// this rather than reach for `wasmtime::Config::default()` directly.
 ///
@@ -114,25 +114,82 @@ pub const TIP_HEIGHT_KEY: &'static str = "/__INTERNAL/tip-height";
 /// - `memory_init_cow(false)` — disable copy-on-write so two
 ///   instances of the same module don't share underlying pages.
 ///   Defense against accidental cross-instance state contamination.
-/// - `async_support(true)` — required because the indexer runs via
-///   `instantiate_async` + `start.call_async`.
 ///
-/// Flags intentionally NOT set on the indexer engine, but flipped
-/// on the VIEW engine in `load()`/`new()`:
-/// - `wasm_threads(true)` — view-only. Consensus-critical that the
-///   indexer wasm cannot use shared memory + atomics; those
-///   semantics are not deterministic across thread schedules.
-/// - `consume_fuel(true)` — view-only. The indexer doesn't meter
-///   per-instruction fuel (it metered per-block via FuelTank at
-///   the alkanes layer).
+/// Pinned explicitly to the values wasmtime 43 used by default (the
+/// engine production indexed with through v9.1.0-rc.1), so a wasmtime
+/// upgrade cannot change them silently. Verified by printing the
+/// effective `Config` under 43.0.0 and 49.0.2:
+/// - `strategy(Cranelift)`, `cranelift_opt_level(Speed)` — unchanged
+///   defaults, pinned for the record.
+/// - `wasm_gc(false)`, `wasm_function_references(false)`,
+///   `wasm_exceptions(false)` — turned on by default in wasmtime 47.
+/// - `wasm_wide_arithmetic(false)` — on by default in wasmtime 49.
+/// - `wasm_component_model_async(false)` — on by default in wasmtime
+///   46 (components only; core modules are unaffected either way).
+/// - `wasm_threads(true)` — this was ALREADY the effective default on
+///   the indexer engine under 43 (wasmtime enables threads by default
+///   when built with its `threads` feature), despite earlier docs here
+///   saying the indexer had it off. It is pinned to its real historical
+///   value; turning it off would change which modules validate.
+///
+/// `async_support(true)` used to be called here; it has been a
+/// deprecated no-op since wasmtime 43 (async is decided per call), so
+/// it is gone.
 pub fn indexer_config() -> wasmtime::Config {
     let mut config = wasmtime::Config::default();
+    config.strategy(wasmtime::Strategy::Cranelift);
+    config.cranelift_opt_level(wasmtime::OptLevel::Speed);
     config.cranelift_nan_canonicalization(true);
     config.relaxed_simd_deterministic(true);
     config.memory_reservation(0x100000000);
     config.memory_guard_size(0x10000);
     config.memory_init_cow(false);
-    config.async_support(true);
+    // Proposal flags as wasmtime 43 had them (see above).
+    config.wasm_threads(true);
+    config.wasm_gc(false);
+    config.wasm_function_references(false);
+    config.wasm_exceptions(false);
+    config.wasm_wide_arithmetic(false);
+    config.wasm_component_model_async(false);
+    config
+}
+
+/// The VIEW engine's config: [`indexer_config`] plus fuel metering.
+///
+/// - `consume_fuel(true)` — view-only. Views run with `u64::MAX` fuel;
+///   fuel exists to drive `fuel_async_yield_interval`, so its cost
+///   model only changes how often a view yields, never its result. The
+///   indexer doesn't meter per-instruction fuel (alkanes meters per
+///   block via FuelTank).
+/// - variable operator costs = 0 — wasmtime 46 started charging
+///   `memory.{copy,fill,init}`, `table.*` and `array.*` per byte/element
+///   (and 48 made it configurable). Zeroing the variable part restores
+///   the wasmtime 43 model, where every operator had a flat cost, so
+///   view yield cadence is what it was.
+/// - `wasm_threads(true)` — same as the indexer engine (see there);
+///   kept as an explicit call for the record.
+pub fn view_config() -> wasmtime::Config {
+    let mut config = indexer_config();
+    config.consume_fuel(true);
+    config.wasm_threads(true);
+    let mut cost = wasmtime::OperatorCost::new();
+    cost.variable.memory_copy_per_byte = 0;
+    cost.variable.memory_fill_per_byte = 0;
+    cost.variable.memory_init_per_byte = 0;
+    cost.variable.memory_grow_per_page = 0;
+    cost.variable.table_copy_per_element = 0;
+    cost.variable.table_fill_per_element = 0;
+    cost.variable.table_init_per_element = 0;
+    cost.variable.table_grow_per_element = 0;
+    cost.variable.array_copy_per_element = 0;
+    cost.variable.array_fill_per_element = 0;
+    cost.variable.array_new_data_per_element = 0;
+    cost.variable.array_init_data_per_element = 0;
+    cost.variable.array_new_elem_per_element = 0;
+    cost.variable.array_init_elem_per_element = 0;
+    cost.variable.array_new_default_per_element = 0;
+    cost.variable.array_new_per_element = 0;
+    config.operator_cost(cost);
     config
 }
 
@@ -512,9 +569,7 @@ impl<T: KeyValueStoreLike + Clone + Send + Sync + 'static> MetashrewRuntime<T> {
         let config = indexer_config();
         let engine = wasmtime::Engine::new(&config)?;
 
-        let mut async_config = config.clone();
-        async_config.consume_fuel(true);
-        async_config.wasm_threads(true);
+        let async_config = view_config();
 
         let async_engine = wasmtime::Engine::new(&async_config)?;
         let module = wasmtime::Module::from_file(&engine, indexer.clone().into_os_string())
@@ -578,9 +633,7 @@ impl<T: KeyValueStoreLike + Clone + Send + Sync + 'static> MetashrewRuntime<T> {
         let config = indexer_config();
         let engine = wasmtime::Engine::new(&config)?;
 
-        let mut async_config = config.clone();
-        async_config.consume_fuel(true);
-        async_config.wasm_threads(true);
+        let async_config = view_config();
 
         let async_engine = wasmtime::Engine::new(&async_config)?;
         let module = wasmtime::Module::new(&engine, indexer)
