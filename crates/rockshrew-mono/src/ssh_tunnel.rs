@@ -372,7 +372,6 @@ fn load_secret_key<P: AsRef<Path>>(
     }
 }
 
-
 /// Find an available local port for the SSH tunnel
 pub async fn find_available_port() -> Result<u16> {
     // Try multiple times to find an available port

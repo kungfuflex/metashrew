@@ -142,7 +142,7 @@ pub trait KeyValueStoreLike {
     /// This must implement standard error traits to enable proper error handling
     /// and debugging throughout the system.
     type Error: std::fmt::Debug + Send + Sync + std::error::Error + 'static;
-    
+
     /// The batch type used for atomic operations
     ///
     /// This allows different storage backends to use their own optimized batch
@@ -477,7 +477,7 @@ pub struct AtomicBlockResult {
     /// - Snapshot metadata and integrity verification
     /// - Chain reorganization detection and handling
     pub state_root: Vec<u8>,
-    
+
     /// Serialized batch data containing all database operations
     ///
     /// This contains all the key-value operations that were performed
@@ -485,13 +485,13 @@ pub struct AtomicBlockResult {
     /// applied atomically to the database. The exact format depends
     /// on the storage implementation.
     pub batch_data: Vec<u8>,
-    
+
     /// The block height that was processed
     ///
     /// This is the Bitcoin block height (block number) that was processed
     /// to generate this result. Used for ordering and verification.
     pub height: u32,
-    
+
     /// The block hash
     ///
     /// This is the Bitcoin block hash (32 bytes) that uniquely identifies

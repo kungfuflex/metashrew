@@ -1,6 +1,8 @@
 //! In-memory implementation of KeyValueStoreLike trait for fast testing
 
-use metashrew_runtime::{rollback::SmtRollback, to_labeled_key, BatchLike, KeyValueStoreLike, TIP_HEIGHT_KEY};
+use metashrew_runtime::{
+    rollback::SmtRollback, to_labeled_key, BatchLike, KeyValueStoreLike, TIP_HEIGHT_KEY,
+};
 use std::collections::HashMap;
 use std::io::{Error, Result};
 use std::sync::{Arc, Mutex};
@@ -202,8 +204,8 @@ impl KeyValueStoreLike for MemStoreAdapter {
         self.deep_copy()
     }
 }
-use metashrew_sync::{StorageAdapter, StorageStats, SyncResult};
 use async_trait::async_trait;
+use metashrew_sync::{StorageAdapter, StorageStats, SyncResult};
 
 // Implement SmtRollback trait for proper reorg handling
 impl SmtRollback for MemStoreAdapter {
@@ -277,18 +279,24 @@ impl StorageAdapter for MemStoreAdapter {
         Ok(())
     }
     async fn store_block_hash(&mut self, height: u32, hash: &[u8]) -> SyncResult<()> {
-        self.put(format!("block_hash_{}", height).as_bytes(), hash).unwrap();
+        self.put(format!("block_hash_{}", height).as_bytes(), hash)
+            .unwrap();
         Ok(())
     }
     async fn get_block_hash(&self, height: u32) -> SyncResult<Option<Vec<u8>>> {
-        Ok(self.get_immutable(format!("block_hash_{}", height).as_bytes()).unwrap())
+        Ok(self
+            .get_immutable(format!("block_hash_{}", height).as_bytes())
+            .unwrap())
     }
     async fn store_state_root(&mut self, height: u32, root: &[u8]) -> SyncResult<()> {
-        self.put(format!("state_root_{}", height).as_bytes(), root).unwrap();
+        self.put(format!("state_root_{}", height).as_bytes(), root)
+            .unwrap();
         Ok(())
     }
     async fn get_state_root(&self, height: u32) -> SyncResult<Option<Vec<u8>>> {
-        Ok(self.get_immutable(format!("state_root_{}", height).as_bytes()).unwrap())
+        Ok(self
+            .get_immutable(format!("state_root_{}", height).as_bytes())
+            .unwrap())
     }
     async fn rollback_to_height(&mut self, height: u32) -> SyncResult<()> {
         use metashrew_runtime::rollback::rollback_smt_data;
@@ -302,8 +310,9 @@ impl StorageAdapter for MemStoreAdapter {
         };
 
         // Use the shared SMT rollback implementation
-        rollback_smt_data(self, height, current_height)
-            .map_err(|e| metashrew_sync::SyncError::Storage(format!("SMT rollback failed: {}", e)))?;
+        rollback_smt_data(self, height, current_height).map_err(|e| {
+            metashrew_sync::SyncError::Storage(format!("SMT rollback failed: {}", e))
+        })?;
 
         // Persist the rolled-back tip in the shared db too.
         let _ = self.set_indexed_height(height).await;

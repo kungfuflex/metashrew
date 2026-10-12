@@ -13,9 +13,9 @@ use metashrew_sync::{
     SnapshotProvider, SnapshotServer, SnapshotServerStatus, StorageAdapter, SyncError, SyncResult,
 };
 
-use crate::adapters::{MetashrewRuntimeAdapter};
-use rockshrew_runtime::fork_adapter::ForkAdapter;
+use crate::adapters::MetashrewRuntimeAdapter;
 use crate::snapshot::{RepoIndex, SnapshotConfig, SnapshotManager};
+use rockshrew_runtime::fork_adapter::ForkAdapter;
 use rockshrew_runtime::RocksDBStorageAdapter;
 
 /// Production snapshot provider using the existing SnapshotManager
@@ -38,24 +38,27 @@ impl RockshrewSnapshotProvider {
 
     /// Set the runtime adapter to get tracked changes from
     #[allow(dead_code)]
-    pub fn set_runtime_adapter(&mut self, runtime_adapter: Arc<RwLock<MetashrewRuntimeAdapter<ForkAdapter>>>) {
+    pub fn set_runtime_adapter(
+        &mut self,
+        runtime_adapter: Arc<RwLock<MetashrewRuntimeAdapter<ForkAdapter>>>,
+    ) {
         self.runtime_adapter = Some(runtime_adapter);
     }
 
     #[allow(dead_code)]
     pub async fn initialize(&self, current_height: u32) -> Result<()> {
         let mut manager = self.manager.write().await;
-        
+
         // Initialize the directory structure first
         manager.initialize().await?;
-        
+
         // Set the last_snapshot_height to the current height without opening the database
         manager.last_snapshot_height = current_height;
         info!(
             "Set last snapshot height to {} for snapshot provider",
             current_height
         );
-        
+
         Ok(())
     }
 
@@ -93,36 +96,42 @@ impl SnapshotProvider for RockshrewSnapshotProvider {
         // Get tracked changes from the runtime adapter if available
         let actual_size = if let Some(runtime_adapter) = &self.runtime_adapter {
             // Get the snapshot manager with tracked changes from the runtime adapter
-            if let Some(runtime_manager_arc) = runtime_adapter.read().await.get_snapshot_manager().await {
+            if let Some(runtime_manager_arc) =
+                runtime_adapter.read().await.get_snapshot_manager().await
+            {
                 let mut manager = self.manager.write().await;
                 let start_height = manager.last_snapshot_height;
-                
+
                 info!("Creating snapshot for interval {}-{}", start_height, height);
-                
+
                 // Access the runtime manager through the Arc<RwLock<>>
                 let runtime_manager = runtime_manager_arc.read().await;
-                info!("Using {} tracked key-value changes from runtime adapter", runtime_manager.key_changes.len());
-                
+                info!(
+                    "Using {} tracked key-value changes from runtime adapter",
+                    runtime_manager.key_changes.len()
+                );
+
                 // Get tracking stats for debugging
-                let (logical_updates, raw_operations, logical_size, raw_size) = runtime_manager.get_tracking_stats();
+                let (logical_updates, raw_operations, logical_size, raw_size) =
+                    runtime_manager.get_tracking_stats();
                 info!("Snapshot tracking stats: {} logical updates ({} bytes), {} raw operations ({} bytes)",
                       logical_updates, logical_size, raw_operations, raw_size);
-                
+
                 // Copy the tracked changes from the runtime manager to our manager
                 manager.key_changes = runtime_manager.key_changes.clone();
                 manager.raw_operations = runtime_manager.raw_operations.clone();
                 manager.key_change_heights = runtime_manager.key_change_heights.clone();
                 manager.last_snapshot_height = start_height;
-                
+
                 // Release the runtime manager lock before creating snapshot
                 drop(runtime_manager);
-                
+
                 // Create the snapshot with the tracked changes
                 manager
                     .create_snapshot(height, &state_root)
                     .await
                     .map_err(|e| SyncError::Runtime(format!("Failed to create snapshot: {}", e)))?;
-                
+
                 // Calculate the actual size of the snapshot data
                 let mut total_size = 0u64;
                 for (key, value) in &manager.key_changes {
@@ -130,8 +139,12 @@ impl SnapshotProvider for RockshrewSnapshotProvider {
                     total_size += key.len() as u64;
                     total_size += value.len() as u64;
                 }
-                
-                info!("Calculated snapshot data size: {} bytes from {} key-value pairs", total_size, manager.key_changes.len());
+
+                info!(
+                    "Calculated snapshot data size: {} bytes from {} key-value pairs",
+                    total_size,
+                    manager.key_changes.len()
+                );
                 total_size
             } else {
                 info!("No snapshot manager found in runtime adapter, creating empty snapshot");
@@ -146,21 +159,28 @@ impl SnapshotProvider for RockshrewSnapshotProvider {
             // Fallback to the old behavior if no runtime adapter is set
             let mut manager = self.manager.write().await;
             let start_height = manager.last_snapshot_height;
-            
-            info!("Creating snapshot for interval {}-{} (no runtime adapter)", start_height, height);
-            info!("Using {} tracked key-value changes", manager.key_changes.len());
-            
+
+            info!(
+                "Creating snapshot for interval {}-{} (no runtime adapter)",
+                start_height, height
+            );
+            info!(
+                "Using {} tracked key-value changes",
+                manager.key_changes.len()
+            );
+
             // Get tracking stats for debugging
-            let (logical_updates, raw_operations, logical_size, raw_size) = manager.get_tracking_stats();
+            let (logical_updates, raw_operations, logical_size, raw_size) =
+                manager.get_tracking_stats();
             info!("Snapshot tracking stats: {} logical updates ({} bytes), {} raw operations ({} bytes)",
                   logical_updates, logical_size, raw_operations, raw_size);
-            
+
             // Create the snapshot with the tracked changes
             manager
                 .create_snapshot(height, &state_root)
                 .await
                 .map_err(|e| SyncError::Runtime(format!("Failed to create snapshot: {}", e)))?;
-            
+
             // Calculate the actual size of the snapshot data
             let mut total_size = 0u64;
             for (key, value) in &manager.key_changes {
@@ -168,17 +188,23 @@ impl SnapshotProvider for RockshrewSnapshotProvider {
                 total_size += key.len() as u64;
                 total_size += value.len() as u64;
             }
-            
+
             total_size
         };
 
         // Get block hash from storage
         let block_hash = {
             let storage = self.storage.read().await;
-            storage.get_block_hash(height).await?.unwrap_or_else(|| vec![0u8; 32])
+            storage
+                .get_block_hash(height)
+                .await?
+                .unwrap_or_else(|| vec![0u8; 32])
         };
 
-        info!("Successfully created snapshot for height {} with {} bytes of data", height, actual_size);
+        info!(
+            "Successfully created snapshot for height {} with {} bytes of data",
+            height, actual_size
+        );
 
         // Return metadata in the format expected by the trait
         Ok(GenericMetadata {
@@ -299,7 +325,7 @@ impl SnapshotProvider for RockshrewSnapshotProvider {
         // For snapshot repositories, we should NOT automatically delete old snapshots
         // as they provide the complete history needed for syncing from any point.
         // Only clean up if explicitly configured with a max_snapshots limit.
-        
+
         let manager = self.manager.read().await;
         let intervals_dir = manager.config.directory.join("intervals");
 
@@ -311,7 +337,7 @@ impl SnapshotProvider for RockshrewSnapshotProvider {
         // For now, we'll disable automatic cleanup to maintain complete snapshot history
         // This can be made configurable in the future if needed
         let max_snapshots = None; // TODO: Add max_snapshots to SnapshotConfig if needed
-        
+
         if max_snapshots.is_none() {
             info!("No max_snapshots limit configured - maintaining complete snapshot history");
             return Ok(0);
@@ -319,7 +345,7 @@ impl SnapshotProvider for RockshrewSnapshotProvider {
 
         // If max_snapshots is configured, proceed with cleanup
         let max_snapshots = max_snapshots.unwrap();
-        
+
         // Read all interval directories
         let mut entries = tokio::fs::read_dir(&intervals_dir).await.map_err(|e| {
             SyncError::Runtime(format!("Failed to read intervals directory: {}", e))
@@ -359,7 +385,10 @@ impl SnapshotProvider for RockshrewSnapshotProvider {
         }
 
         if removed_count > 0 {
-            info!("Cleaned up {} old snapshots (keeping {} most recent)", removed_count, max_snapshots);
+            info!(
+                "Cleaned up {} old snapshots (keeping {} most recent)",
+                removed_count, max_snapshots
+            );
         }
 
         Ok(removed_count)
@@ -372,7 +401,7 @@ impl SnapshotProvider for RockshrewSnapshotProvider {
         if height == 0 {
             return false;
         }
-        
+
         // Try to get the interval from the manager config
         // This is not ideal but works for the current architecture
         if let Ok(manager) = self.manager.try_read() {

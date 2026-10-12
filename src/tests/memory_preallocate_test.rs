@@ -5,8 +5,8 @@
 //! across all environments by ensuring the runtime crashes if it cannot pre-allocate
 //! the full 4GB address space upfront.
 
-use metashrew_runtime::MetashrewRuntime;
 use memshrew_runtime::MemStoreAdapter;
+use metashrew_runtime::MetashrewRuntime;
 
 /// Test that instantiating the runtime requires the full 4GB memory space.
 ///
@@ -19,7 +19,9 @@ async fn test_runtime_instantiation_requires_4gb() {
     use crate::test_utils;
 
     println!("\n🔬 TEST: Runtime Instantiation Memory Pre-allocation\n");
-    println!("This test verifies that MetashrewRuntime pre-allocates the full 4GB WASM32 memory space");
+    println!(
+        "This test verifies that MetashrewRuntime pre-allocates the full 4GB WASM32 memory space"
+    );
     println!("Expected behavior:");
     println!("  - High memory environment (≥4GB): Instantiation SUCCEEDS");
     println!("  - Low memory environment (<4GB): Instantiation FAILS/PANICS immediately");
@@ -59,7 +61,10 @@ async fn test_minimal_runtime_instantiation() {
     // Load the minimal WASM
     let wasm_bytes = test_utils::WASM;
 
-    println!("Creating MetashrewRuntime with {} bytes of WASM...", wasm_bytes.len());
+    println!(
+        "Creating MetashrewRuntime with {} bytes of WASM...",
+        wasm_bytes.len()
+    );
 
     // Create storage and engine
     let storage = MemStoreAdapter::new();
@@ -68,8 +73,11 @@ async fn test_minimal_runtime_instantiation() {
     let engine = wasmtime::Engine::new(&config).expect("Failed to create engine");
 
     // This line should fail/panic if we can't pre-allocate 4GB
-    let _runtime = MetashrewRuntime::new(wasm_bytes, storage, engine).await
-        .expect("Failed to instantiate runtime - likely insufficient memory for 4GB pre-allocation");
+    let _runtime = MetashrewRuntime::new(wasm_bytes, storage, engine)
+        .await
+        .expect(
+            "Failed to instantiate runtime - likely insufficient memory for 4GB pre-allocation",
+        );
 
     println!("✅ Runtime instantiated successfully");
     println!("   Memory pre-allocation succeeded");

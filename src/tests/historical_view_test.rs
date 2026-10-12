@@ -1,16 +1,21 @@
-
 //! Test for historical view function execution.
 //!
 //! This test verifies that `metashrew_view` can correctly render a result
 //! from the historical state of the database, even after the state has been
 //! overwritten in a later block.
 
-use crate::{in_memory_adapters::InMemoryBitcoinNode, test_utils::{TestConfig, TestUtils}};
+use crate::{
+    in_memory_adapters::InMemoryBitcoinNode,
+    test_utils::{TestConfig, TestUtils},
+};
 use bitcoin::hashes::Hash;
 use bitcoin::BlockHash;
 use memshrew_runtime::MemStoreAdapter;
 use metashrew_runtime::MetashrewRuntime;
-use metashrew_sync::{BitcoinNodeAdapter, MetashrewRuntimeAdapter, RuntimeAdapter, SyncConfig, ViewCall, MetashrewSync, SyncEngine};
+use metashrew_sync::{
+    BitcoinNodeAdapter, MetashrewRuntimeAdapter, MetashrewSync, RuntimeAdapter, SyncConfig,
+    SyncEngine, ViewCall,
+};
 
 #[tokio::test]
 async fn test_historical_view() -> Result<(), Box<dyn std::error::Error>> {
@@ -20,7 +25,9 @@ async fn test_historical_view() -> Result<(), Box<dyn std::error::Error>> {
     let mut config_engine = wasmtime::Config::default();
     config_engine.async_support(true);
     let engine = wasmtime::Engine::new(&config_engine)?;
-    let runtime = TestConfig::new().create_runtime_from_adapter(storage.clone(), engine).await?;
+    let runtime = TestConfig::new()
+        .create_runtime_from_adapter(storage.clone(), engine)
+        .await?;
     let mut agent = MetashrewSync::new(
         InMemoryBitcoinNode::new(genesis_block.clone()),
         storage,

@@ -282,10 +282,7 @@ impl ViewLimiter {
     ///    pressured).
     /// 2. Try to acquire a permit, bounded by `timeout`. If the timeout
     ///    fires first, return [`ViewAcquireError::AcquireTimeout`].
-    pub async fn acquire(
-        &self,
-        timeout: Option<Duration>,
-    ) -> Result<ViewPermit, ViewAcquireError> {
+    pub async fn acquire(&self, timeout: Option<Duration>) -> Result<ViewPermit, ViewAcquireError> {
         // Step 1: memory floor.
         self.memory_floor.check().await?;
 
@@ -334,13 +331,16 @@ mod tests {
     async fn memory_floor_passes_when_available() {
         // 0-byte threshold => always passes.
         let floor = MemoryFloor::new(0, Duration::from_millis(100));
-        floor.check().await.expect("floor with 0 threshold must pass");
+        floor
+            .check()
+            .await
+            .expect("floor with 0 threshold must pass");
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn memory_floor_fails_when_overridden_below() {
         let floor = MemoryFloor::new(
-            1024 * 1024 * 1024, // 1GB threshold
+            1024 * 1024 * 1024,      // 1GB threshold
             Duration::from_secs(60), // long refresh so override sticks
         );
         floor.override_available_memory(512 * 1024 * 1024).await;

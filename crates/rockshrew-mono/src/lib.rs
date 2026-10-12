@@ -45,12 +45,12 @@
 // - The `run` function should be generic over the adapter traits to support both
 //   production (RocksDB) and testing (in-memory) environments.
 
-pub mod smt_helper;
 pub mod adapters;
+pub mod cpu_isolation;
+pub mod smt_helper;
 pub mod snapshot;
 pub mod snapshot_adapters;
 pub mod ssh_tunnel;
-pub mod cpu_isolation;
 
 #[cfg(test)]
 mod tests;
@@ -73,8 +73,8 @@ use crate::adapters::MetashrewRuntimeAdapter;
 use crate::ssh_tunnel::parse_daemon_rpc_url;
 use metashrew_runtime::{set_label, MetashrewRuntime};
 use metashrew_sync::{
-    BitcoinNodeAdapter, JsonRpcProvider, RuntimeAdapter, SnapshotMetashrewSync,
-    SnapshotProvider, StorageAdapter, SyncConfig, SyncMode,
+    BitcoinNodeAdapter, JsonRpcProvider, RuntimeAdapter, SnapshotMetashrewSync, SnapshotProvider,
+    StorageAdapter, SyncConfig, SyncMode,
 };
 use rockshrew_runtime::{
     adapter::{query_height_legacy, RocksDBRuntimeAdapter},
@@ -517,7 +517,10 @@ where
     let request: serde_json::Value = body.into_inner();
     let method = request["method"].as_str().unwrap_or_default().to_string();
     let empty_params = vec![];
-    let params_owned = request["params"].as_array().cloned().unwrap_or(empty_params);
+    let params_owned = request["params"]
+        .as_array()
+        .cloned()
+        .unwrap_or(empty_params);
     let id = request["id"].clone();
 
     let timeout = rpc_method_timeout(&method);
@@ -574,8 +577,7 @@ where
                             }
                             Err(metashrew_runtime::ViewAcquireError::MemoryFloor) => {
                                 return Err(metashrew_sync::error::SyncError::Unavailable(
-                                    "system memory pressure, view runtime backing off"
-                                        .to_string(),
+                                    "system memory pressure, view runtime backing off".to_string(),
                                 ));
                             }
                             Err(metashrew_runtime::ViewAcquireError::Closed) => {
@@ -595,8 +597,16 @@ where
                     // blocks any reconfiguration/write that needs the outer
                     // lock. Snapshot isolation in execute_view (v9.0.4-rc.1)
                     // makes early release safe.
-                    let function_name = params_owned.get(0).and_then(|v| v.as_str()).unwrap_or_default().to_string();
-                    let input_hex = params_owned.get(1).and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                    let function_name = params_owned
+                        .get(0)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    let input_hex = params_owned
+                        .get(1)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
                     let height_str = match params_owned.get(2) {
                         Some(v) if v.is_string() => v.as_str().unwrap().to_string(),
                         Some(v) if v.is_number() => v.to_string(),
@@ -605,7 +615,12 @@ where
 
                     let input_data = match hex::decode(input_hex.trim_start_matches("0x")) {
                         Ok(b) => b,
-                        Err(e) => return Err(metashrew_sync::error::SyncError::Serialization(format!("Invalid hex input: {}", e))),
+                        Err(e) => {
+                            return Err(metashrew_sync::error::SyncError::Serialization(format!(
+                                "Invalid hex input: {}",
+                                e
+                            )))
+                        }
                     };
 
                     let (runtime, current) = {
@@ -619,7 +634,11 @@ where
                         metashrew_sync::snapshot_sync::parse_height_string(&height_str)?
                     };
 
-                    let call = metashrew_sync::ViewCall { function_name, input_data, height };
+                    let call = metashrew_sync::ViewCall {
+                        function_name,
+                        input_data,
+                        height,
+                    };
                     let result = runtime.execute_view(call).await?;
                     Ok(format!("0x{}", hex::encode(result.data)))
                 }
@@ -632,12 +651,10 @@ where
                     // disabling preview entirely on indexer pods narrows
                     // the leak hunt.
                     if !state_clone.enable_preview {
-                        return Err(metashrew_sync::error::SyncError::Generic(
-                            anyhow::anyhow!(
-                                "metashrew_preview is not enabled on this node \
+                        return Err(metashrew_sync::error::SyncError::Generic(anyhow::anyhow!(
+                            "metashrew_preview is not enabled on this node \
                                  (start rockshrew-mono with --enable-preview to allow it)"
-                            )
-                        ));
+                        )));
                     }
                     // v9.0.5-rc.2: preview also runs WASM with an
                     // unbounded store — gate it behind the same limiter
@@ -653,8 +670,7 @@ where
                             }
                             Err(metashrew_runtime::ViewAcquireError::MemoryFloor) => {
                                 return Err(metashrew_sync::error::SyncError::Unavailable(
-                                    "system memory pressure, view runtime backing off"
-                                        .to_string(),
+                                    "system memory pressure, view runtime backing off".to_string(),
                                 ));
                             }
                             Err(metashrew_runtime::ViewAcquireError::Closed) => {
@@ -670,9 +686,21 @@ where
                     // preview also runs WASM via runtime.execute_preview
                     // and snapshot isolation means we don't need the outer
                     // lock held across the WASM call.
-                    let block_hex = params_owned.get(0).and_then(|v| v.as_str()).unwrap_or_default().to_string();
-                    let function_name = params_owned.get(1).and_then(|v| v.as_str()).unwrap_or_default().to_string();
-                    let input_hex = params_owned.get(2).and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                    let block_hex = params_owned
+                        .get(0)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    let function_name = params_owned
+                        .get(1)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    let input_hex = params_owned
+                        .get(2)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
                     let height_str = match params_owned.get(3) {
                         Some(v) if v.is_string() => v.as_str().unwrap().to_string(),
                         Some(v) if v.is_number() => v.to_string(),
@@ -681,11 +709,21 @@ where
 
                     let block_data = match hex::decode(block_hex.trim_start_matches("0x")) {
                         Ok(b) => b,
-                        Err(e) => return Err(metashrew_sync::error::SyncError::Serialization(format!("Invalid hex block data: {}", e))),
+                        Err(e) => {
+                            return Err(metashrew_sync::error::SyncError::Serialization(format!(
+                                "Invalid hex block data: {}",
+                                e
+                            )))
+                        }
                     };
                     let input_data = match hex::decode(input_hex.trim_start_matches("0x")) {
                         Ok(b) => b,
-                        Err(e) => return Err(metashrew_sync::error::SyncError::Serialization(format!("Invalid hex input: {}", e))),
+                        Err(e) => {
+                            return Err(metashrew_sync::error::SyncError::Serialization(format!(
+                                "Invalid hex input: {}",
+                                e
+                            )))
+                        }
                     };
 
                     let (runtime, current) = {
@@ -699,23 +737,57 @@ where
                         metashrew_sync::snapshot_sync::parse_height_string(&height_str)?
                     };
 
-                    let call = metashrew_sync::PreviewCall { block_data, function_name, input_data, height };
+                    let call = metashrew_sync::PreviewCall {
+                        block_data,
+                        function_name,
+                        input_data,
+                        height,
+                    };
                     let result = runtime.execute_preview(call).await?;
                     Ok(format!("0x{}", hex::encode(result.data)))
                 }
                 // Storage-read methods stay on the trait API (sub-ms work;
                 // the read lock is briefly contended but never held across
                 // anything long-running).
-                "metashrew_height" => state_clone.sync_engine.read().await.metashrew_height().await.map(|h| h.to_string()),
+                "metashrew_height" => state_clone
+                    .sync_engine
+                    .read()
+                    .await
+                    .metashrew_height()
+                    .await
+                    .map(|h| h.to_string()),
                 "metashrew_getblockhash" => {
-                    let height = params_owned.get(0).and_then(|v| v.as_u64()).unwrap_or_default() as u32;
-                    state_clone.sync_engine.read().await.metashrew_getblockhash(height).await
+                    let height = params_owned
+                        .get(0)
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or_default() as u32;
+                    state_clone
+                        .sync_engine
+                        .read()
+                        .await
+                        .metashrew_getblockhash(height)
+                        .await
                 }
                 "metashrew_stateroot" => {
-                    let height = params_owned.get(0).and_then(|v| v.as_str()).unwrap_or("latest").to_string();
-                    state_clone.sync_engine.read().await.metashrew_stateroot(height).await
+                    let height = params_owned
+                        .get(0)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("latest")
+                        .to_string();
+                    state_clone
+                        .sync_engine
+                        .read()
+                        .await
+                        .metashrew_stateroot(height)
+                        .await
                 }
-                "metashrew_snapshot" => state_clone.sync_engine.read().await.metashrew_snapshot().await.map(|v| v.to_string()),
+                "metashrew_snapshot" => state_clone
+                    .sync_engine
+                    .read()
+                    .await
+                    .metashrew_snapshot()
+                    .await
+                    .map(|v| v.to_string()),
                 _ => Err(anyhow::anyhow!("Method not found").into()),
             }
         };
@@ -750,8 +822,8 @@ where
     // back-off logic. Code -32000 stays the generic "everything else"
     // bucket for backwards compatibility.
     enum RpcErrorCode {
-        Generic,        // -32000
-        Unavailable,    // -32001  (view-runtime semaphore / memory-floor)
+        Generic,           // -32000
+        Unavailable,       // -32001  (view-runtime semaphore / memory-floor)
         ResourceExhausted, // -32002  (per-view memory cap)
     }
 
@@ -801,7 +873,10 @@ where
                 RpcErrorCode::Unavailable => -32001,
                 RpcErrorCode::ResourceExhausted => -32002,
             };
-            error!("RPC error for method {}: code={} {}", method, json_code, msg);
+            error!(
+                "RPC error for method {}: code={} {}",
+                method, json_code, msg
+            );
             serde_json::json!({
                 "jsonrpc": "2.0",
                 "error": {
@@ -821,7 +896,9 @@ async fn setup_signal_handler() -> Arc<AtomicBool> {
     let shutdown_requested = Arc::new(AtomicBool::new(false));
     let shutdown_clone = shutdown_requested.clone();
     tokio::spawn(async move {
-        signal::ctrl_c().await.expect("Failed to install CTRL+C signal handler");
+        signal::ctrl_c()
+            .await
+            .expect("Failed to install CTRL+C signal handler");
         shutdown_clone.store(true, Ordering::SeqCst);
         info!("Shutdown signal received, initiating graceful shutdown...");
     });
@@ -1077,7 +1154,10 @@ where
         let last_sent_height = last_sent_height.clone();
 
         async move {
-            info!("Block fetcher task started (prefetch_size={}).", prefetch_size);
+            info!(
+                "Block fetcher task started (prefetch_size={}).",
+                prefetch_size
+            );
             loop {
                 // Get current state
                 let engine = sync_engine_clone.read().await;
@@ -1127,7 +1207,9 @@ where
                 } else {
                     std::cmp::max((last_sent_snapshot as u32).saturating_add(1), processor_tip)
                 };
-                if remote_tip.saturating_sub(near_tip_fetch_start) <= engine.config.reorg_check_threshold {
+                if remote_tip.saturating_sub(near_tip_fetch_start)
+                    <= engine.config.reorg_check_threshold
+                {
                     // v9.0.5-rc.7 near-tip dedup guard.
                     //
                     // rc.6 added `last_sent_height` and a "bump on
@@ -1187,7 +1269,15 @@ where
                                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                                 continue;
                             }
-                            if block_sender_clone.send(BlockData { height, block_data, block_hash: block_hash.clone() }).await.is_err() {
+                            if block_sender_clone
+                                .send(BlockData {
+                                    height,
+                                    block_data,
+                                    block_hash: block_hash.clone(),
+                                })
+                                .await
+                                .is_err()
+                            {
                                 break;
                             }
                             // Bump fetcher watermark only AFTER a
@@ -1259,7 +1349,11 @@ where
                     match handle.await {
                         Ok(Ok(block)) => {
                             let h = block.height;
-                            debug!("FETCHER: Fetched block {} ({} bytes)", h, block.block_data.len());
+                            debug!(
+                                "FETCHER: Fetched block {} ({} bytes)",
+                                h,
+                                block.block_data.len()
+                            );
                             if block_sender_clone.send(block).await.is_err() {
                                 abort_remaining = true;
                             } else {
@@ -1272,11 +1366,19 @@ where
                             }
                         }
                         Ok(Err(e)) => {
-                            error!("FETCHER: Failed to fetch block {}: {}", fetch_start + i as u32, e);
+                            error!(
+                                "FETCHER: Failed to fetch block {}: {}",
+                                fetch_start + i as u32,
+                                e
+                            );
                             abort_remaining = true;
                         }
                         Err(e) => {
-                            error!("FETCHER: Fetch task panicked for block {}: {}", fetch_start + i as u32, e);
+                            error!(
+                                "FETCHER: Fetch task panicked for block {}: {}",
+                                fetch_start + i as u32,
+                                e
+                            );
                             abort_remaining = true;
                         }
                     }
@@ -1351,18 +1453,30 @@ where
                         let block_start = Instant::now();
 
                         let engine = sync_engine_clone.read().await;
-                        let result = match engine.process_block(block_data.height, block_data.block_data, block_data.block_hash).await {
+                        let result = match engine
+                            .process_block(
+                                block_data.height,
+                                block_data.block_data,
+                                block_data.block_hash,
+                            )
+                            .await
+                        {
                             Ok(_) => {
                                 let elapsed = block_start.elapsed();
                                 if elapsed > std::time::Duration::from_secs(1) {
                                     warn!("Slow block {} took {:?}", block_data.height, elapsed);
                                 }
                                 BlockResult::Success(block_data.height)
-                            },
+                            }
                             Err(e) => {
-                                error!("PROCESSOR: Failed block {} after {:?}: {}", block_data.height, block_start.elapsed(), e);
+                                error!(
+                                    "PROCESSOR: Failed block {} after {:?}: {}",
+                                    block_data.height,
+                                    block_start.elapsed(),
+                                    e
+                                );
                                 BlockResult::Error(block_data.height, e.into())
-                            },
+                            }
                         };
                         drop(engine);
 
@@ -1380,78 +1494,88 @@ where
         let sync_engine_clone = sync_engine_arc.clone();
         let last_sent_height_idx = last_sent_height.clone();
         async move {
-        info!("Starting block indexing process...");
-        let mut block_count = 0u64;
-        let start_time = Instant::now();
+            info!("Starting block indexing process...");
+            let mut block_count = 0u64;
+            let start_time = Instant::now();
 
-        while let Some(result) = result_receiver.recv().await {
-            match result {
-                BlockResult::Success(height) => {
-                    block_count += 1;
+            while let Some(result) = result_receiver.recv().await {
+                match result {
+                    BlockResult::Success(height) => {
+                        block_count += 1;
 
-                    if block_count % 100 == 0 {
-                        let elapsed = start_time.elapsed();
-                        let blocks_per_sec = block_count as f64 / elapsed.as_secs_f64();
-                        info!(
-                            "Sync: height={}, {} blocks, {:.1} blocks/sec",
-                            height, block_count, blocks_per_sec
-                        );
+                        if block_count % 100 == 0 {
+                            let elapsed = start_time.elapsed();
+                            let blocks_per_sec = block_count as f64 / elapsed.as_secs_f64();
+                            info!(
+                                "Sync: height={}, {} blocks, {:.1} blocks/sec",
+                                height, block_count, blocks_per_sec
+                            );
+                        }
                     }
-                }
-                BlockResult::Error(height, error) => {
-                    let error_str = error.to_string();
+                    BlockResult::Error(height, error) => {
+                        let error_str = error.to_string();
 
-                    // Chain validation errors and out-of-order commits both
-                    // mean the cursor no longer matches storage — resync.
-                    if is_resync_error(&error_str) {
-                        warn!("Chain discontinuity at height {}. Triggering reorg.", height);
+                        // Chain validation errors and out-of-order commits both
+                        // mean the cursor no longer matches storage — resync.
+                        if is_resync_error(&error_str) {
+                            warn!(
+                                "Chain discontinuity at height {}. Triggering reorg.",
+                                height
+                            );
 
-                        // v9.0.5-rc.16: re-anchor the engine cursor to the
-                        // on-disk tip before reorg detection. Previously this
-                        // called `handle_reorg(height, ..)` and discarded the
-                        // result, so the engine's `current_height` was never
-                        // lowered — and for an out-of-order rejection
-                        // `handle_reorg` returns `height` itself, leaving the
-                        // fetcher ahead of disk until a restart.
-                        let engine = sync_engine_clone.read().await;
-                        match engine.resync_cursor_to_storage_tip().await {
-                            Ok(rollback_height) => {
-                                info!("Rolled back to height {}. Resuming sync.", rollback_height);
-                                // v9.0.5-rc.6: rollback dropped the
-                                // processor's tip DOWN. The fetcher's
-                                // own last-sent watermark could be
-                                // ahead of the rollback point; reset
-                                // it to UNSET so the next fetch loop
-                                // picks up processor_tip as the new
-                                // starting height. We use store, not
-                                // fetch_min, to ensure full reset —
-                                // we never want to keep a stale
-                                // last_sent past a rollback.
-                                last_sent_height_idx.store(LAST_SENT_UNSET, Ordering::SeqCst);
-                                warn!(
+                            // v9.0.5-rc.16: re-anchor the engine cursor to the
+                            // on-disk tip before reorg detection. Previously this
+                            // called `handle_reorg(height, ..)` and discarded the
+                            // result, so the engine's `current_height` was never
+                            // lowered — and for an out-of-order rejection
+                            // `handle_reorg` returns `height` itself, leaving the
+                            // fetcher ahead of disk until a restart.
+                            let engine = sync_engine_clone.read().await;
+                            match engine.resync_cursor_to_storage_tip().await {
+                                Ok(rollback_height) => {
+                                    info!(
+                                        "Rolled back to height {}. Resuming sync.",
+                                        rollback_height
+                                    );
+                                    // v9.0.5-rc.6: rollback dropped the
+                                    // processor's tip DOWN. The fetcher's
+                                    // own last-sent watermark could be
+                                    // ahead of the rollback point; reset
+                                    // it to UNSET so the next fetch loop
+                                    // picks up processor_tip as the new
+                                    // starting height. We use store, not
+                                    // fetch_min, to ensure full reset —
+                                    // we never want to keep a stale
+                                    // last_sent past a rollback.
+                                    last_sent_height_idx.store(LAST_SENT_UNSET, Ordering::SeqCst);
+                                    warn!(
                                     "FETCHER: last_sent_height reset to UNSET after rollback to {} — fetcher will resume from processor_tip",
                                     rollback_height
                                 );
+                                }
+                                Err(e) => {
+                                    error!("Failed to handle reorg: {}", e);
+                                }
                             }
-                            Err(e) => {
-                                error!("Failed to handle reorg: {}", e);
-                            }
+                            drop(engine);
                         }
-                        drop(engine);
-                    }
 
-                    error!("Failed to process block {}: {}", height, error_str);
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                        error!("Failed to process block {}: {}", height, error_str);
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    }
                 }
-            }
-            if let Some(exit_at) = args.exit_at {
-                if block_count as u32 >= exit_at {
-                    info!("Reached exit-at block {}, shutting down gracefully", exit_at);
-                    break;
+                if let Some(exit_at) = args.exit_at {
+                    if block_count as u32 >= exit_at {
+                        info!(
+                            "Reached exit-at block {}, shutting down gracefully",
+                            exit_at
+                        );
+                        break;
+                    }
                 }
             }
         }
-    }});
+    });
 
     // v9.0.5-rc.11 CPU isolation: HTTP/view workers pinned to the
     // complementary core pool + given a higher (more polite) nice
@@ -1500,17 +1624,17 @@ where
             App::new()
                 .wrap(cors)
                 .app_data(app_state.clone())
-                .service(
-                    web::resource("/")
-                        .route(web::post().to(handle_jsonrpc::<N, S, R>))
-                )
+                .service(web::resource("/").route(web::post().to(handle_jsonrpc::<N, S, R>)))
         })
         .workers(view_workers)
         .bind((args.host.as_str(), args.port))?
         .run()
     });
 
-    info!("JSON-RPC server running at http://{}:{}", args.host, args.port);
+    info!(
+        "JSON-RPC server running at http://{}:{}",
+        args.host, args.port
+    );
     info!("Indexer is ready and processing blocks.");
 
     let shutdown_signal = setup_signal_handler().await;
@@ -1561,9 +1685,9 @@ async fn run_generic<R: RuntimeAdapter + 'static>(
     runtime_adapter: R,
     storage_adapter: RocksDBStorageAdapter,
 ) -> Result<()> {
-    let (rpc_url, bypass_ssl, tunnel_config) =
-        parse_daemon_rpc_url(&args.daemon_rpc_url).await?;
-    let node_adapter = BitcoinRpcAdapter::new(rpc_url, args.auth.clone(), bypass_ssl, tunnel_config);
+    let (rpc_url, bypass_ssl, tunnel_config) = parse_daemon_rpc_url(&args.daemon_rpc_url).await?;
+    let node_adapter =
+        BitcoinRpcAdapter::new(rpc_url, args.auth.clone(), bypass_ssl, tunnel_config);
     run(args, node_adapter, storage_adapter, runtime_adapter, None).await
 }
 
@@ -1621,9 +1745,8 @@ pub async fn run_prod(args: Args) -> Result<()> {
                 RocksDBStorageAdapter::new(legacy_adapter.db.clone())
             }
         };
-        let runtime_adapter =
-            MetashrewRuntimeAdapter::new(Arc::new(runtime))
-                .with_view_limits(view_limits_cfg.clone());
+        let runtime_adapter = MetashrewRuntimeAdapter::new(Arc::new(runtime))
+            .with_view_limits(view_limits_cfg.clone());
         run_generic(args, runtime_adapter, storage_adapter).await
     } else {
         let adapter =
@@ -1638,9 +1761,8 @@ pub async fn run_prod(args: Args) -> Result<()> {
         // hypothesis for the g vs h 907-DIESEL drift at h=950299.
         let runtime = MetashrewRuntime::load(args.indexer.clone(), adapter.clone()).await?;
         let storage_adapter = RocksDBStorageAdapter::new(adapter.db.clone());
-        let runtime_adapter =
-            MetashrewRuntimeAdapter::new(Arc::new(runtime))
-                .with_view_limits(view_limits_cfg.clone());
+        let runtime_adapter = MetashrewRuntimeAdapter::new(Arc::new(runtime))
+            .with_view_limits(view_limits_cfg.clone());
         run_generic(args, runtime_adapter, storage_adapter).await
     }
 }

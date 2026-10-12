@@ -41,7 +41,9 @@ macro_rules! println {
 #[cfg(not(feature = "debug-log"))]
 #[macro_export]
 macro_rules! println {
-  ( $( $x:tt )* ) => { () }
+    ( $( $x:tt )* ) => {
+        ()
+    };
 }
 
 #[cfg(feature = "debug-log")]
@@ -57,7 +59,9 @@ macro_rules! print {
 #[cfg(not(feature = "debug-log"))]
 #[macro_export]
 macro_rules! print {
-  ( $( $x:tt )* ) => { () }
+    ( $( $x:tt )* ) => {
+        ()
+    };
 }
 
 /*

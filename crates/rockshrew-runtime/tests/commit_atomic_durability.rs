@@ -27,18 +27,16 @@
 //!    bytes produces byte-for-byte identical end state.
 
 use metashrew_sync::StorageAdapter;
-use rockshrew_runtime::{RocksDBRuntimeAdapter, RocksDBStorageAdapter};
 use rocksdb::WriteBatch;
+use rockshrew_runtime::{RocksDBRuntimeAdapter, RocksDBStorageAdapter};
 use std::sync::Arc;
 use tempfile::tempdir;
 
 #[tokio::test]
 async fn commit_atomic_writes_all_three_keys_atomically() {
     let dir = tempdir().unwrap();
-    let adapter = RocksDBRuntimeAdapter::open_optimized(
-        dir.path().to_str().unwrap().to_string(),
-    )
-    .unwrap();
+    let adapter =
+        RocksDBRuntimeAdapter::open_optimized(dir.path().to_str().unwrap().to_string()).unwrap();
     let db = adapter.db.clone();
     let mut storage = RocksDBStorageAdapter::new(db.clone());
 
@@ -67,10 +65,8 @@ async fn commit_atomic_writes_all_three_keys_atomically() {
 #[tokio::test]
 async fn commit_atomic_rejects_out_of_order_on_rocksdb() {
     let dir = tempdir().unwrap();
-    let adapter = RocksDBRuntimeAdapter::open_optimized(
-        dir.path().to_str().unwrap().to_string(),
-    )
-    .unwrap();
+    let adapter =
+        RocksDBRuntimeAdapter::open_optimized(dir.path().to_str().unwrap().to_string()).unwrap();
     let mut storage = RocksDBStorageAdapter::new(adapter.db.clone());
 
     storage
@@ -302,10 +298,9 @@ async fn commit_atomic_retry_produces_identical_state() {
 
     // Path A: one-shot commit (no retry).
     {
-        let adapter = RocksDBRuntimeAdapter::open_optimized(
-            dir_a.path().to_str().unwrap().to_string(),
-        )
-        .unwrap();
+        let adapter =
+            RocksDBRuntimeAdapter::open_optimized(dir_a.path().to_str().unwrap().to_string())
+                .unwrap();
         let mut storage = RocksDBStorageAdapter::new(adapter.db.clone());
 
         let mut wasm_batch = WriteBatch::default();
@@ -323,10 +318,9 @@ async fn commit_atomic_retry_produces_identical_state() {
     // strict-in-order check), then a clean retry at the correct height
     // succeeds. Same batch bytes, same metadata, must produce same state.
     {
-        let adapter = RocksDBRuntimeAdapter::open_optimized(
-            dir_b.path().to_str().unwrap().to_string(),
-        )
-        .unwrap();
+        let adapter =
+            RocksDBRuntimeAdapter::open_optimized(dir_b.path().to_str().unwrap().to_string())
+                .unwrap();
         let mut storage = RocksDBStorageAdapter::new(adapter.db.clone());
 
         // Seed Path B with the same first-commit as Path A so the strict-in-order
@@ -365,10 +359,9 @@ async fn commit_atomic_retry_produces_identical_state() {
     // For symmetric comparison, advance Path A the same way (one extra
     // in-order commit at tip+1) without any failed-attempt history.
     {
-        let adapter = RocksDBRuntimeAdapter::open_optimized(
-            dir_a.path().to_str().unwrap().to_string(),
-        )
-        .unwrap();
+        let adapter =
+            RocksDBRuntimeAdapter::open_optimized(dir_a.path().to_str().unwrap().to_string())
+                .unwrap();
         let mut storage = RocksDBStorageAdapter::new(adapter.db.clone());
         let mut wasm_batch = WriteBatch::default();
         wasm_batch.put(b"k3", b"v3");
@@ -380,14 +373,10 @@ async fn commit_atomic_retry_produces_identical_state() {
     }
 
     // Compare the on-disk state of both DBs.
-    let adapter_a = RocksDBRuntimeAdapter::open_optimized(
-        dir_a.path().to_str().unwrap().to_string(),
-    )
-    .unwrap();
-    let adapter_b = RocksDBRuntimeAdapter::open_optimized(
-        dir_b.path().to_str().unwrap().to_string(),
-    )
-    .unwrap();
+    let adapter_a =
+        RocksDBRuntimeAdapter::open_optimized(dir_a.path().to_str().unwrap().to_string()).unwrap();
+    let adapter_b =
+        RocksDBRuntimeAdapter::open_optimized(dir_b.path().to_str().unwrap().to_string()).unwrap();
     let storage_a = RocksDBStorageAdapter::new(adapter_a.db.clone());
     let storage_b = RocksDBStorageAdapter::new(adapter_b.db.clone());
 

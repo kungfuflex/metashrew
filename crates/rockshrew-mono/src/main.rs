@@ -63,42 +63,42 @@ static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 fn init_tracing() {
     // Check if console debugging is requested via environment variable
     let _use_console = std::env::var("ROCKSHREW_CONSOLE").is_ok();
-    
+
     #[cfg(feature = "console")]
     if use_console {
         console_subscriber::init();
         return;
     }
-    
+
     // Check if JSON tracing is requested
     #[cfg(feature = "debug-tracing")]
     if std::env::var("ROCKSHREW_JSON_TRACING").is_ok() {
         use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-        
+
         tracing_subscriber::registry()
             .with(tracing_subscriber::fmt::layer().json())
             .with(tracing_subscriber::EnvFilter::from_default_env())
             .init();
         return;
     }
-    
+
     // Enhanced tracing for debugging
     if std::env::var("ROCKSHREW_DEBUG").is_ok() {
         use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-        
+
         tracing_subscriber::registry()
             .with(
                 tracing_subscriber::fmt::layer()
                     .with_target(true)
                     .with_thread_ids(true)
                     .with_line_number(true)
-                    .with_file(true)
+                    .with_file(true),
             )
             .with(tracing_subscriber::EnvFilter::from_default_env())
             .init();
         return;
     }
-    
+
     // Default: use env_logger for backward compatibility
     env_logger::builder().format_timestamp_secs().init();
 }
@@ -136,7 +136,8 @@ async fn main() -> Result<()> {
                 "raised RLIMIT_NOFILE soft cap from {} to {} (matches RocksDB \
                  set_max_open_files(50000) headroom; prevents the 'Too many \
                  open files' wedge documented in PRODUCTION_BUGS_AUDIT.md)",
-                pre, post
+                pre,
+                post
             );
         }
         Ok((pre, _)) => {

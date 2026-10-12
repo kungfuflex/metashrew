@@ -70,7 +70,7 @@ impl SnapshotManager {
     const MAX_TRACKED_CHANGES: usize = 1_000_000; // 1M entries = ~100-200MB max
     /// Check memory usage every N blocks
     const MEMORY_CHECK_INTERVAL: u32 = 50;
-    
+
     pub fn new(config: SnapshotConfig) -> Self {
         Self {
             config,
@@ -188,7 +188,11 @@ impl SnapshotManager {
 
         // Copy WASM file to snapshot directory
         let wasm_dir = self.config.directory.join("wasm");
-        let dest_path = wasm_dir.join(format!("{}_{}.wasm", filename, if hash.len() >= 8 { &hash[..8] } else { &hash }));
+        let dest_path = wasm_dir.join(format!(
+            "{}_{}.wasm",
+            filename,
+            if hash.len() >= 8 { &hash[..8] } else { &hash }
+        ));
 
         if !dest_path.exists() {
             std::fs::copy(&wasm_path, &dest_path)?;
@@ -213,23 +217,24 @@ impl SnapshotManager {
                 );
                 self.clear_tracked_changes();
             }
-            
+
             // Record the raw operation for debugging
             self.raw_operations.push((key.clone(), value.clone()));
-            
+
             // For real-time tracking from WASM, we need to handle both:
             // 1. Raw logical key-value pairs (from WASM __flush)
             // 2. Append-only database keys (from post-processing)
-            
+
             let key_str = String::from_utf8_lossy(&key);
-            
+
             // Check if this is an append-only database key that needs extraction
             if key_str.contains('/') && !key_str.ends_with("/length") {
                 // This is likely an append-only key, try to extract logical k/v
                 if let Some((logical_key, logical_value)) = self.extract_logical_kv(&key, &value) {
                     self.key_changes.insert(logical_key.clone(), logical_value);
                     // Track when this key was last changed for incremental snapshots
-                    self.key_change_heights.insert(logical_key, self.current_processing_height);
+                    self.key_change_heights
+                        .insert(logical_key, self.current_processing_height);
                 }
             } else {
                 // This is likely a raw logical key-value pair from WASM
@@ -237,45 +242,44 @@ impl SnapshotManager {
                 if !key_str.starts_with("__INTERNAL") && !key_str.starts_with("smt:node:") {
                     self.key_changes.insert(key.clone(), value);
                     // Track when this key was last changed for incremental snapshots
-                    self.key_change_heights.insert(key, self.current_processing_height);
+                    self.key_change_heights
+                        .insert(key, self.current_processing_height);
                 }
             }
         }
     }
 
-    
-
     /// Extract logical key-value pairs from append-only database format
     /// This determines what gets included in snapshot diffs
     fn extract_logical_kv(&self, key: &[u8], value: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
         let key_str = String::from_utf8_lossy(key);
-        
+
         // Handle SMT root keys: include as-is for state verification
         if key_str.starts_with("smt:root:") {
             return Some((key.to_vec(), value.to_vec()));
         }
-        
+
         // Skip other SMT internal keys (nodes, etc.)
         if key_str.starts_with("smt:") {
             return None;
         }
-        
+
         // Skip internal system keys
         if key_str.starts_with("__INTERNAL/") {
             return None;
         }
-        
+
         // Skip length tracking keys (these are metadata for the append-only structure)
         if key_str.ends_with("/length") {
             return None;
         }
-        
+
         // For append-only update keys like "key/0", "key/1", etc., we want the base key
         // The value should already be the decoded hex value (not "height:hex" format)
         if key_str.contains('/') {
             if let Some(slash_pos) = key_str.rfind('/') {
                 let suffix = &key_str[slash_pos + 1..];
-                
+
                 // Verify this is a numeric update index
                 if suffix.chars().all(|c| c.is_ascii_digit()) {
                     // Extract the base key (everything before the "/index")
@@ -284,7 +288,7 @@ impl SnapshotManager {
                 }
             }
         }
-        
+
         // For any other keys, include them as-is
         // This ensures we don't miss any important data
         Some((key.to_vec(), value.to_vec()))
@@ -294,30 +298,41 @@ impl SnapshotManager {
     pub fn get_tracking_stats(&self) -> (usize, usize, usize, usize) {
         let logical_updates = self.key_changes.len();
         let raw_operations = self.raw_operations.len();
-        let total_logical_size = self.key_changes.iter()
+        let total_logical_size = self
+            .key_changes
+            .iter()
             .map(|(k, v)| k.len() + v.len())
             .sum();
-        let total_raw_size = self.raw_operations.iter()
+        let total_raw_size = self
+            .raw_operations
+            .iter()
             .map(|(k, v)| k.len() + v.len())
             .sum();
-        
-        (logical_updates, raw_operations, total_logical_size, total_raw_size)
+
+        (
+            logical_updates,
+            raw_operations,
+            total_logical_size,
+            total_raw_size,
+        )
     }
 
     /// Set the current processing height (called before processing each block)
     pub fn set_current_height(&mut self, height: u32) {
         self.current_processing_height = height;
-        
+
         // CRITICAL FIX: Periodic memory management to prevent hanging
         if height % self.memory_check_interval == 0 {
             let memory_usage = self.estimate_memory_usage();
             let tracked_count = self.key_changes.len();
-            
+
             info!(
                 "Snapshot memory check at height {}: {} tracked changes, ~{:.1} MB",
-                height, tracked_count, memory_usage as f64 / (1024.0 * 1024.0)
+                height,
+                tracked_count,
+                memory_usage as f64 / (1024.0 * 1024.0)
             );
-            
+
             // Clear if memory usage is too high (500MB limit)
             if memory_usage > 500_000_000 {
                 warn!(
@@ -339,22 +354,22 @@ impl SnapshotManager {
     /// Estimate memory usage of tracked changes to prevent accumulation
     fn estimate_memory_usage(&self) -> usize {
         let mut total = 0;
-        
+
         // Estimate key_changes HashMap memory
         for (key, value) in &self.key_changes {
             total += key.len() + value.len() + 64; // Include HashMap overhead
         }
-        
+
         // Estimate raw_operations Vec memory
         for (key, value) in &self.raw_operations {
             total += key.len() + value.len() + 32; // Include Vec overhead
         }
-        
+
         // Estimate key_change_heights HashMap memory
         for (key, _height) in &self.key_change_heights {
             total += key.len() + 4 + 32; // key + u32 + HashMap overhead
         }
-        
+
         total
     }
 
@@ -378,7 +393,9 @@ impl SnapshotManager {
         let end_height = height;
 
         // Filter key changes to only include those that changed since the last snapshot
-        let incremental_changes: HashMap<Vec<u8>, Vec<u8>> = self.key_changes.iter()
+        let incremental_changes: HashMap<Vec<u8>, Vec<u8>> = self
+            .key_changes
+            .iter()
             .filter_map(|(key, value)| {
                 // Only include keys that were changed after the last snapshot height
                 if let Some(&change_height) = self.key_change_heights.get(key) {
@@ -401,7 +418,10 @@ impl SnapshotManager {
 
         // If we have no incremental changes, this might be normal for some intervals
         if incremental_changes.is_empty() {
-            info!("No incremental changes for snapshot interval {}-{}", start_height, end_height);
+            info!(
+                "No incremental changes for snapshot interval {}-{}",
+                start_height, end_height
+            );
             info!("This will result in an empty snapshot diff file (normal for intervals with no changes)");
         }
 
@@ -431,7 +451,10 @@ impl SnapshotManager {
             diff_data.extend_from_slice(value);
         }
 
-        info!("Incremental snapshot diff data size: {} bytes (before compression)", diff_data.len());
+        info!(
+            "Incremental snapshot diff data size: {} bytes (before compression)",
+            diff_data.len()
+        );
 
         // Compress with zstd
         let compressed = zstd::encode_all(&diff_data[..], 3)?;
@@ -480,7 +503,15 @@ impl SnapshotManager {
             end_height,
             state_root: state_root_hex,
             diff_file: format!("intervals/{}-{}/diff.bin.zst", start_height, end_height),
-            wasm_file: format!("wasm/{}_{}.wasm", wasm_filename, if wasm_hash.len() >= 8 { &wasm_hash[..8] } else { &wasm_hash }),
+            wasm_file: format!(
+                "wasm/{}_{}.wasm",
+                wasm_filename,
+                if wasm_hash.len() >= 8 {
+                    &wasm_hash[..8]
+                } else {
+                    &wasm_hash
+                }
+            ),
             wasm_hash,
             // NOTE: Timestamp is metadata-only for tracking snapshot creation time
             // It does NOT affect state verification or determinism
@@ -517,14 +548,17 @@ impl SnapshotManager {
             self.key_change_heights.remove(&key);
             self.key_changes.remove(&key);
         }
-        
+
         // Clear raw operations as they're only used for debugging
         self.raw_operations.clear();
 
-        info!("Created incremental snapshot for height {} with {} changes", height, incremental_changes.len());
+        info!(
+            "Created incremental snapshot for height {} with {} changes",
+            height,
+            incremental_changes.len()
+        );
         Ok(())
     }
-
 
     /// Sync from a remote repository using parallel processing
     pub async fn sync_from_repo(

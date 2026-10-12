@@ -23,9 +23,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use metashrew_runtime::view_limits::{
-    ViewAcquireError, ViewLimiter, ViewLimitsConfig,
-};
+use metashrew_runtime::view_limits::{ViewAcquireError, ViewLimiter, ViewLimitsConfig};
 
 /// 1. Concurrent acquire test: 100 tasks, 16 permits — no more than 16 in
 /// flight at any time, and every task eventually gets a permit.
@@ -58,12 +56,7 @@ async fn semaphore_bounds_concurrent_views() {
             // Bump max_seen with relaxed CAS-loop semantics.
             let mut prev = max_seen.load(Ordering::SeqCst);
             while cur > prev {
-                match max_seen.compare_exchange(
-                    prev,
-                    cur,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                ) {
+                match max_seen.compare_exchange(prev, cur, Ordering::SeqCst, Ordering::SeqCst) {
                     Ok(_) => break,
                     Err(actual) => prev = actual,
                 }
@@ -203,7 +196,9 @@ async fn indexer_immune_to_view_pressure() {
     // available memory below it. With BOTH conditions (saturated + floor
     // breached), every new acquire must be refused — and the indexer task
     // must keep making progress.
-    limiter.memory_floor().set_threshold(100 * 1024 * 1024 * 1024);
+    limiter
+        .memory_floor()
+        .set_threshold(100 * 1024 * 1024 * 1024);
     limiter
         .memory_floor()
         .override_available_memory(1024 * 1024 * 1024) // 1 GB free

@@ -14,8 +14,8 @@ use log::info;
 use memshrew_runtime::{BuggyMemStoreAdapter, MemStoreAdapter};
 use metashrew_runtime::smt::SMTHelper;
 use metashrew_sync::{
-    adapters::MetashrewRuntimeAdapter, BitcoinNodeAdapter, BlockInfo, ChainTip,
-    SyncConfig, SyncEngine, SyncResult,
+    adapters::MetashrewRuntimeAdapter, BitcoinNodeAdapter, BlockInfo, ChainTip, SyncConfig,
+    SyncEngine, SyncResult,
 };
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -66,11 +66,7 @@ impl BitcoinNodeAdapter for MockNode {
     async fn get_block_info(&self, height: u32) -> SyncResult<BlockInfo> {
         let hash = self.get_block_hash(height).await?;
         let data = self.get_block_data(height).await?;
-        Ok(BlockInfo {
-            height,
-            hash,
-            data,
-        })
+        Ok(BlockInfo { height, hash, data })
     }
 
     async fn get_chain_tip(&self) -> SyncResult<ChainTip> {
@@ -134,11 +130,13 @@ async fn test_buggy_rollback_leaves_old_data() -> Result<()> {
 
     // Verify Chain A block 3 hash is stored
     let smt_helper = SMTHelper::new(shared_storage.inner().clone());
-    let chain_a_hash_3_stored = smt_helper.get_at_height(&"/block-hashes/3".as_bytes().to_vec(), 4)?;
+    let chain_a_hash_3_stored =
+        smt_helper.get_at_height(&"/block-hashes/3".as_bytes().to_vec(), 4)?;
     assert!(chain_a_hash_3_stored.is_some());
 
     let chain_a_hash_3 = chain_a.get_block(3).unwrap().block_hash();
-    let stored = bitcoin::BlockHash::from_byte_array(chain_a_hash_3_stored.unwrap().try_into().unwrap());
+    let stored =
+        bitcoin::BlockHash::from_byte_array(chain_a_hash_3_stored.unwrap().try_into().unwrap());
     assert_eq!(stored, chain_a_hash_3);
     info!("  Chain A block 3 hash verified: {:?}", chain_a_hash_3);
 

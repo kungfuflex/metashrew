@@ -33,14 +33,19 @@ fn out_of_order_rejection_is_a_resync_error() {
     ));
     assert!(is_resync_error("CHAIN DISCONTINUITY at 100"));
     // Transient storage failures are not resync signals.
-    assert!(!is_resync_error("commit_atomic: Database error: Too many open files"));
+    assert!(!is_resync_error(
+        "commit_atomic: Database error: Too many open files"
+    ));
 }
 
 #[tokio::test]
 async fn out_of_order_rejection_rewinds_fetcher_to_disk_tip() {
     let mut storage = MockStorage::new();
     for h in 0..=100u32 {
-        storage.commit_atomic(h, &[h as u8; 32], &[0u8; 32], &[]).await.unwrap();
+        storage
+            .commit_atomic(h, &[h as u8; 32], &[0u8; 32], &[])
+            .await
+            .unwrap();
     }
     let node = MockBitcoinNode::new();
     for h in 0..=110u32 {
@@ -54,12 +59,18 @@ async fn out_of_order_rejection_rewinds_fetcher_to_disk_tip() {
         reorg_check_threshold: 6,
         enable_startup_heal: false,
     };
-    let mut sync = SnapshotMetashrewSync::new(node, storage, MockRuntime::new(), config, SyncMode::Normal);
+    let mut sync =
+        SnapshotMetashrewSync::new(node, storage, MockRuntime::new(), config, SyncMode::Normal);
     sync.init().await;
 
     // Cursor drifts ahead of disk: disk tip 96, cursor 101, and the fetcher
     // has already enqueued through 104.
-    sync.storage().write().await.rollback_to_height(96).await.unwrap();
+    sync.storage()
+        .write()
+        .await
+        .rollback_to_height(96)
+        .await
+        .unwrap();
     let last_sent: i64 = 104;
     assert_eq!(
         compute_next_fetch_range(sync.current_height(), last_sent, 10, 110),
@@ -73,7 +84,10 @@ async fn out_of_order_rejection_rewinds_fetcher_to_disk_tip() {
         .await
         .expect_err("block ahead of disk tip must be rejected");
     let err_str = err.to_string();
-    assert!(is_resync_error(&err_str), "indexer arm must match: {err_str}");
+    assert!(
+        is_resync_error(&err_str),
+        "indexer arm must match: {err_str}"
+    );
 
     // Indexer arm: resync the engine, reset the fetcher watermark.
     let rollback = sync.resync_cursor_to_storage_tip().await.unwrap();
@@ -87,6 +101,8 @@ async fn out_of_order_rejection_rewinds_fetcher_to_disk_tip() {
     );
 
     // And the block the fetcher now sends commits.
-    sync.process_block_with_snapshots(97, &[0u8; 80]).await.unwrap();
+    sync.process_block_with_snapshots(97, &[0u8; 80])
+        .await
+        .unwrap();
     assert_eq!(sync.get_height().await.unwrap(), 97);
 }

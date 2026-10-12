@@ -31,9 +31,7 @@ fn classify_view_error(err: anyhow::Error) -> SyncError {
         || lower.contains("memory size")
         || lower.contains("cannotgrow")
     {
-        SyncError::ResourceExhausted(format!(
-            "view function exceeded memory budget: {chain}"
-        ))
+        SyncError::ResourceExhausted(format!("view function exceeded memory budget: {chain}"))
     } else {
         SyncError::ViewFunction(format!("View function failed: {chain}"))
     }
@@ -170,7 +168,11 @@ impl BitcoinRpcAdapter {
             .map_err(|e| SyncError::BitcoinNode(format!("Hex decode error: {}", e)))
     }
 
-    async fn request_with_retry<T: DeserializeOwned>(&self, method: &str, params: Vec<Value>) -> Result<T> {
+    async fn request_with_retry<T: DeserializeOwned>(
+        &self,
+        method: &str,
+        params: Vec<Value>,
+    ) -> Result<T> {
         let max_retries = 5;
         let mut retry_delay = Duration::from_millis(500);
         let max_delay = Duration::from_secs(16);
@@ -217,16 +219,26 @@ impl BitcoinRpcAdapter {
                             }
                         }
                     }
-                    
+
                     match tunneled_response.json::<T>().await {
                         Ok(response) => return Ok(response),
                         Err(e) => {
-                            log::warn!("JSON parsing failed (attempt {}): {}. Retrying in {:?}...", attempt + 1, e, retry_delay);
+                            log::warn!(
+                                "JSON parsing failed (attempt {}): {}. Retrying in {:?}...",
+                                attempt + 1,
+                                e,
+                                retry_delay
+                            );
                         }
                     }
                 }
                 Err(e) => {
-                    log::warn!("Request failed (attempt {}): {}. Retrying in {:?}...", attempt + 1, e, retry_delay);
+                    log::warn!(
+                        "Request failed (attempt {}): {}. Retrying in {:?}...",
+                        attempt + 1,
+                        e,
+                        retry_delay
+                    );
                     if let Some(guard) = &mut active_tunnel_guard {
                         **guard = None;
                     }
@@ -250,7 +262,10 @@ impl BitcoinRpcAdapter {
             tokio::time::sleep(retry_delay).await;
         }
 
-        Err(anyhow::anyhow!("Max retries exceeded for method {}", method))
+        Err(anyhow::anyhow!(
+            "Max retries exceeded for method {}",
+            method
+        ))
     }
 }
 #[async_trait]
@@ -338,12 +353,17 @@ impl<T: KeyValueStoreLike + Clone + Send + Sync + 'static> MetashrewRuntimeAdapt
         }
     }
 
-    pub async fn set_snapshot_manager(&self, manager: Arc<RwLock<crate::snapshot::SnapshotManager>>) {
+    pub async fn set_snapshot_manager(
+        &self,
+        manager: Arc<RwLock<crate::snapshot::SnapshotManager>>,
+    ) {
         let mut snapshot_manager = self.snapshot_manager.write().await;
         *snapshot_manager = Some(manager);
     }
 
-    pub async fn get_snapshot_manager(&self) -> Option<Arc<RwLock<crate::snapshot::SnapshotManager>>> {
+    pub async fn get_snapshot_manager(
+        &self,
+    ) -> Option<Arc<RwLock<crate::snapshot::SnapshotManager>>> {
         self.snapshot_manager.read().await.as_ref().cloned()
     }
 
@@ -357,13 +377,17 @@ impl<T: KeyValueStoreLike + Clone + Send + Sync + 'static> MetashrewRuntimeAdapt
 }
 
 #[async_trait]
-impl<T: KeyValueStoreLike + Clone + Send + Sync + 'static> RuntimeAdapter for MetashrewRuntimeAdapter<T>
+impl<T: KeyValueStoreLike + Clone + Send + Sync + 'static> RuntimeAdapter
+    for MetashrewRuntimeAdapter<T>
 where
     <T as KeyValueStoreLike>::Batch: Send,
 {
     async fn process_block(&self, height: u32, block_data: &[u8]) -> SyncResult<()> {
         // No external lock needed - MetashrewRuntime handles internal synchronization
-        self.runtime.process_block(height, block_data).await.map_err(|e| SyncError::Runtime(e.to_string()))
+        self.runtime
+            .process_block(height, block_data)
+            .await
+            .map_err(|e| SyncError::Runtime(e.to_string()))
     }
     async fn process_block_atomic(
         &self,
@@ -372,12 +396,16 @@ where
         block_hash: &[u8],
     ) -> SyncResult<AtomicBlockResult> {
         // No external lock needed - MetashrewRuntime handles internal synchronization
-        self.runtime.process_block_atomic(height, block_data, block_hash).await.map(|r| AtomicBlockResult {
-            state_root: r.state_root,
-            batch_data: r.batch_data,
-            height: r.height,
-            block_hash: r.block_hash,
-        }).map_err(|e| SyncError::Runtime(e.to_string()))
+        self.runtime
+            .process_block_atomic(height, block_data, block_hash)
+            .await
+            .map(|r| AtomicBlockResult {
+                state_root: r.state_root,
+                batch_data: r.batch_data,
+                height: r.height,
+                block_hash: r.block_hash,
+            })
+            .map_err(|e| SyncError::Runtime(e.to_string()))
     }
 
     async fn get_state_root(&self, height: u32) -> SyncResult<Vec<u8>> {
@@ -418,7 +446,8 @@ where
     async fn execute_preview(&self, call: PreviewCall) -> SyncResult<ViewResult> {
         // preview() creates an isolated DB copy, processes the block, then runs a view function
         // No external locking needed - all isolation is handled internally
-        let result = self.runtime
+        let result = self
+            .runtime
             .preview_async(
                 &call.block_data,
                 call.function_name,
@@ -484,7 +513,10 @@ mod block_hash_tests {
         let hash = hex::decode(SIGNET_BLOCK_1_HASH).unwrap();
         let err = verify_block_hash(1, &hash, &body).unwrap_err().to_string();
         assert!(err.contains("does not match"), "{err}");
-        assert!(err.contains(SKIP_VERIFY_ENV), "error must name the escape hatch: {err}");
+        assert!(
+            err.contains(SKIP_VERIFY_ENV),
+            "error must name the escape hatch: {err}"
+        );
     }
 
     #[test]

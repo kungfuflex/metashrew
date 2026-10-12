@@ -104,7 +104,8 @@ fn main() -> Result<()> {
     }
 
     let blocks_to_remove = current_height - args.height;
-    warn!("This will REMOVE data for {} blocks ({} to {})",
+    warn!(
+        "This will REMOVE data for {} blocks ({} to {})",
         blocks_to_remove,
         args.height + 1,
         current_height
@@ -129,8 +130,10 @@ fn main() -> Result<()> {
     }
 
     info!("Opening database for rollback...");
-    let db = Arc::new(DB::open_default(&args.db_path)
-        .context("Failed to open database. Is rockshrew-mono still running?")?);
+    let db = Arc::new(
+        DB::open_default(&args.db_path)
+            .context("Failed to open database. Is rockshrew-mono still running?")?,
+    );
 
     // Create storage adapter for rollback
     let mut adapter = RocksDBStorageAdapter::new(db.clone());
@@ -164,8 +167,14 @@ fn main() -> Result<()> {
     }
 
     info!("✅ Rollback completed successfully!");
-    info!("Database has been rolled back from height {} to height {}", current_height, args.height);
-    info!("You can now restart rockshrew-mono to resume indexing from block {}", args.height + 1);
+    info!(
+        "Database has been rolled back from height {} to height {}",
+        current_height, args.height
+    );
+    info!(
+        "You can now restart rockshrew-mono to resume indexing from block {}",
+        args.height + 1
+    );
 
     Ok(())
 }

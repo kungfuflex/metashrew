@@ -121,26 +121,26 @@ pub enum AddressType {
     /// The original Bitcoin address format that pays directly to the hash
     /// of a public key. These addresses start with "1" on mainnet.
     P2pkh,
-    
+
     /// Pay to Script Hash - Multi-signature and complex script addresses.
     ///
     /// Enables complex spending conditions by paying to the hash of a script.
     /// These addresses start with "3" on mainnet and enable multi-signature
     /// wallets and other advanced functionality.
     P2sh,
-    
+
     /// Pay to Witness Public Key Hash - Native SegWit addresses.
     ///
     /// SegWit version 0 addresses that provide transaction malleability fixes
     /// and fee reductions. These addresses start with "bc1q" on mainnet.
     P2wpkh,
-    
+
     /// Pay to Witness Script Hash - Native SegWit script addresses.
     ///
     /// SegWit version 0 script addresses that enable complex spending conditions
     /// with SegWit benefits. Also start with "bc1q" but are longer.
     P2wsh,
-    
+
     /// Pay to Taproot - Latest Bitcoin address format.
     ///
     /// SegWit version 1 addresses that provide enhanced privacy through
@@ -192,13 +192,13 @@ pub enum Payload {
     /// Contains the 20-byte RIPEMD160(SHA256(pubkey)) hash that identifies
     /// the public key authorized to spend the output.
     PubkeyHash(PubkeyHash),
-    
+
     /// P2SH address payload containing a script hash.
     ///
     /// Contains the 20-byte RIPEMD160(SHA256(script)) hash that identifies
     /// the script whose conditions must be satisfied to spend the output.
     ScriptHash(ScriptHash),
-    
+
     /// SegWit address payload containing a witness program.
     ///
     /// Contains the witness version and program data for SegWit outputs.
@@ -495,13 +495,13 @@ impl Payload {
 pub struct AddressEncoding<'a> {
     /// The address payload to encode.
     pub payload: &'a Payload,
-    
+
     /// Base58 version byte for P2PKH payloads (e.g. 0x00 for "1..." addresses).
     pub p2pkh_prefix: u8,
-    
+
     /// Base58 version byte for P2SH payloads (e.g. 0x05 for "3..." addresses).
     pub p2sh_prefix: u8,
-    
+
     /// The bech32 human-readable part for SegWit addresses.
     pub hrp: Hrp,
 }

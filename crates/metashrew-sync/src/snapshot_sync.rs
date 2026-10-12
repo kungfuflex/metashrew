@@ -121,33 +121,42 @@ where
                     crate::sync::StartupHealOutcome::Healed { from, healed_to } => {
                         warn!(
                             "startup-heal: applied (from={} healed_to={}); resuming sync from {}",
-                            from, healed_to, healed_to + 1
+                            from,
+                            healed_to,
+                            healed_to + 1
                         );
                     }
                     crate::sync::StartupHealOutcome::AlreadyConsistent { tip } => {
                         info!("startup-heal: pointers consistent at tip {}", tip);
                     }
                     crate::sync::StartupHealOutcome::Disabled => {
-                        info!("startup-heal: disabled by config; trusting __INTERNAL/height = {}", h);
+                        info!(
+                            "startup-heal: disabled by config; trusting __INTERNAL/height = {}",
+                            h
+                        );
                     }
                 }
                 h
             }
             Err(e) => {
-                error!("startup-heal: FAILED ({}); refusing to advance with divergent state — exiting", e);
+                error!(
+                    "startup-heal: FAILED ({}); refusing to advance with divergent state — exiting",
+                    e
+                );
                 panic!("startup-heal failed: {}", e);
             }
         };
 
         let mut storage = self.storage.write().await;
         let indexed_height = storage.get_indexed_height().await.unwrap_or(0);
-        let start_height = if self.config.start_block > 0 && self.config.start_block > indexed_height {
-            self.config.start_block
-        } else if indexed_height > 0 {
-            indexed_height + 1
-        } else {
-            self.config.start_block
-        };
+        let start_height =
+            if self.config.start_block > 0 && self.config.start_block > indexed_height {
+                self.config.start_block
+            } else if indexed_height > 0 {
+                indexed_height + 1
+            } else {
+                self.config.start_block
+            };
 
         if indexed_height != healed_tip && !(indexed_height == 0 && healed_tip == 0) {
             warn!(
@@ -160,7 +169,10 @@ where
             let prev_height = self.config.start_block.saturating_sub(1);
             if let Ok(None) = storage.get_state_root(prev_height).await {
                 let empty_state_root = vec![0u8; 32];
-                storage.store_state_root(prev_height, &empty_state_root).await.unwrap();
+                storage
+                    .store_state_root(prev_height, &empty_state_root)
+                    .await
+                    .unwrap();
             }
         }
 
@@ -270,7 +282,7 @@ where
 
         // Check for reorgs only when close to the tip
         if remote_tip.saturating_sub(current_height) <= self.config.reorg_check_threshold {
-             match crate::sync::handle_reorg(
+            match crate::sync::handle_reorg(
                 current_height,
                 self.node.clone(),
                 self.storage.clone(),
@@ -336,7 +348,6 @@ where
         }
     }
 
-
     /// Install an opt-in chain-validation policy.
     ///
     /// Replaces the built-in continuity check for every subsequent
@@ -355,9 +366,14 @@ where
     /// 2. Verifies the block's prev_blockhash matches our computed hash of the previous block
     ///
     /// This is more secure than trusting stored hashes - we verify the actual block data.
-    async fn validate_block_connects(&self, height: u32, block_data: &[u8], provided_hash: &[u8]) -> SyncResult<bool> {
+    async fn validate_block_connects(
+        &self,
+        height: u32,
+        block_data: &[u8],
+        provided_hash: &[u8],
+    ) -> SyncResult<bool> {
         use bitcoin::consensus::Encodable;
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
 
         // Opt-in policy takes over completely when configured. The
         // inline checks below stay as the default so behaviour is
@@ -398,21 +414,27 @@ where
 
             let verdict = validator.validate(&req);
             if !verdict.accepted {
-                error!("\u{26a0} SPV REJECT at height {}: {}", height, verdict.reason);
+                error!(
+                    "\u{26a0} SPV REJECT at height {}: {}",
+                    height, verdict.reason
+                );
             }
             return Ok(verdict.accepted);
         }
 
         // Decode the block
-        let block: bitcoin::Block = bitcoin::consensus::deserialize(block_data)
-            .map_err(|e| SyncError::BlockProcessing {
+        let block: bitcoin::Block = bitcoin::consensus::deserialize(block_data).map_err(|e| {
+            SyncError::BlockProcessing {
                 height,
                 message: format!("Failed to deserialize block: {}", e),
-            })?;
+            }
+        })?;
 
         // Step 1: Compute block hash from header (double SHA256)
         let mut header_bytes = Vec::with_capacity(80);
-        block.header.consensus_encode(&mut header_bytes)
+        block
+            .header
+            .consensus_encode(&mut header_bytes)
             .map_err(|e| SyncError::BlockProcessing {
                 height,
                 message: format!("Failed to encode block header: {}", e),
@@ -502,7 +524,10 @@ where
         block_hash: Vec<u8>,
     ) -> SyncResult<()> {
         // SPV-style continuity check.
-        if !self.validate_block_connects(height, &block_data, &block_hash).await? {
+        if !self
+            .validate_block_connects(height, &block_data, &block_hash)
+            .await?
+        {
             return Err(SyncError::BlockProcessing {
                 height,
                 message: format!(
@@ -571,7 +596,12 @@ where
                     let commit_res = {
                         let mut storage = self.storage.write().await;
                         storage
-                            .commit_atomic(height, &result.block_hash, &result.state_root, &result.batch_data)
+                            .commit_atomic(
+                                height,
+                                &result.block_hash,
+                                &result.state_root,
+                                &result.batch_data,
+                            )
                             .await
                     };
                     match commit_res {
@@ -601,10 +631,7 @@ where
                                      immediately for reorg handling",
                                     height, msg
                                 );
-                                return Err(SyncError::Storage(format!(
-                                    "commit_atomic: {}",
-                                    msg
-                                )));
+                                return Err(SyncError::Storage(format!("commit_atomic: {}", msg)));
                             }
 
                             crate::sync::log_atomic_retry_failure(
@@ -657,7 +684,6 @@ where
     }
 
     /// Initialize the sync engine
-
 
     /// Check if we should try to use snapshots for fast sync
     async fn should_attempt_snapshot_sync(&self) -> SyncResult<bool> {
@@ -797,7 +823,12 @@ where
                     let commit_res = {
                         let mut storage = self.storage.write().await;
                         storage
-                            .commit_atomic(height, &result.block_hash, &result.state_root, &result.batch_data)
+                            .commit_atomic(
+                                height,
+                                &result.block_hash,
+                                &result.state_root,
+                                &result.batch_data,
+                            )
                             .await
                     };
                     match commit_res {
@@ -818,8 +849,7 @@ where
                             }
                             let mode = self.sync_mode.read().await;
                             if matches!(*mode, SyncMode::SnapshotServer(_)) {
-                                if let Some(provider) =
-                                    self.snapshot_provider.read().await.as_ref()
+                                if let Some(provider) = self.snapshot_provider.read().await.as_ref()
                                 {
                                     if provider.should_create_snapshot(height) {
                                         if let Some(_server) =
@@ -852,10 +882,7 @@ where
                                      immediately for reorg handling",
                                     height, msg
                                 );
-                                return Err(SyncError::Storage(format!(
-                                    "commit_atomic: {}",
-                                    msg
-                                )));
+                                return Err(SyncError::Storage(format!("commit_atomic: {}", msg)));
                             }
 
                             crate::sync::log_atomic_retry_failure(
@@ -914,7 +941,8 @@ where
             };
 
             // Check for reorgs only when close to the tip
-            if height > 0 && remote_tip.saturating_sub(height) <= self.config.reorg_check_threshold {
+            if height > 0 && remote_tip.saturating_sub(height) <= self.config.reorg_check_threshold
+            {
                 match crate::sync::handle_reorg(
                     height,
                     self.node.clone(),
@@ -1147,7 +1175,8 @@ where
         }
 
         let block_data = self.node.get_block_data(height).await?;
-        self.process_block_with_snapshots(height, block_data).await?;
+        self.process_block_with_snapshots(height, block_data)
+            .await?;
         Ok(Some(height + 1))
     }
 }
@@ -1234,7 +1263,6 @@ where
         let block_data = self.node.get_block_data(height).await?;
         self.process_block_with_snapshots(height, block_data).await
     }
-
 }
 
 pub fn parse_height_string(height_str: &str) -> SyncResult<u32> {

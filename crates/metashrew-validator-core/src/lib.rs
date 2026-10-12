@@ -160,14 +160,15 @@ pub fn validator_for(policy: &Policy) -> Result<Box<dyn ChainValidator>, String>
         Policy::Continuity => Ok(Box::new(ContinuityValidator)),
         #[cfg(feature = "host-wasm")]
         Policy::Custom(path) => {
-            let v = wasm_host::WasmValidator::from_file(path)
-                .map_err(|e| format!("failed to load custom validator {}: {e:#}", path.display()))?;
+            let v = wasm_host::WasmValidator::from_file(path).map_err(|e| {
+                format!("failed to load custom validator {}: {e:#}", path.display())
+            })?;
             Ok(Box::new(v))
         }
         #[cfg(not(feature = "host-wasm"))]
-        Policy::Custom(_) => Err(
-            "custom: validators need this build to enable the `host-wasm` feature".to_string(),
-        ),
+        Policy::Custom(_) => {
+            Err("custom: validators need this build to enable the `host-wasm` feature".to_string())
+        }
     }
 }
 
@@ -335,7 +336,10 @@ impl BitcoinValidator {
         // to_byte_array is internal order; our comparisons are display order.
         let mut display = genesis;
         display.reverse();
-        Self { network, genesis: display }
+        Self {
+            network,
+            genesis: display,
+        }
     }
 
     /// The expected genesis hash, display order.
@@ -406,10 +410,8 @@ mod tests {
     /// Real signet block 1 and its parent (the signet genesis).
     const SIGNET_B1: &str = "00000020f61eee3b63a380a477a063af32b2bbc97c9ff9f01f2c4225e9739881\
 08000000f575c83235984e7dc4afc1f30944c170462e84437ab6f2d52e16878a79e4678bd1914d5fae77031eccf40700";
-    const SIGNET_B1_HASH: &str =
-        "00000086d6b2636cb2a392d45edc4ec544a10024d30141c9adf4bfd9de533b53";
-    const SIGNET_GENESIS: &str =
-        "00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6";
+    const SIGNET_B1_HASH: &str = "00000086d6b2636cb2a392d45edc4ec544a10024d30141c9adf4bfd9de533b53";
+    const SIGNET_GENESIS: &str = "00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6";
 
     fn h(s: &str) -> Vec<u8> {
         hex::decode(s).unwrap()
@@ -452,7 +454,10 @@ mod tests {
     fn real_signet_block_meets_its_own_target() {
         let header = h(SIGNET_B1);
         let bits = bits_of(&header).unwrap();
-        assert!(meets_target(&h32(SIGNET_B1_HASH), bits), "bits {bits:#010x}");
+        assert!(
+            meets_target(&h32(SIGNET_B1_HASH), bits),
+            "bits {bits:#010x}"
+        );
     }
 
     /// The counterexample from the audit: two linked headers with an
@@ -512,7 +517,11 @@ mod tests {
         req.prev_hash = Some([0x42u8; 32]);
         let verdict = BitcoinValidator::new(bitcoin::Network::Signet).validate(&req);
         assert!(!verdict.accepted);
-        assert!(verdict.reason.contains("names parent"), "{}", verdict.reason);
+        assert!(
+            verdict.reason.contains("names parent"),
+            "{}",
+            verdict.reason
+        );
     }
 
     /// The `None => accept` hole in the old code, closed.
@@ -527,7 +536,11 @@ mod tests {
         ] {
             let verdict = v.validate(&req);
             assert!(!verdict.accepted, "{}", v.describe());
-            assert!(verdict.reason.contains("cannot be linked"), "{}", verdict.reason);
+            assert!(
+                verdict.reason.contains("cannot be linked"),
+                "{}",
+                verdict.reason
+            );
         }
     }
 
@@ -554,9 +567,11 @@ mod tests {
         };
 
         // Correct network: accepted.
-        assert!(BitcoinValidator::new(bitcoin::Network::Bitcoin)
-            .validate(&req)
-            .accepted);
+        assert!(
+            BitcoinValidator::new(bitcoin::Network::Bitcoin)
+                .validate(&req)
+                .accepted
+        );
 
         // Configured for signet, served mainnet: rejected.
         let verdict = BitcoinValidator::new(bitcoin::Network::Signet).validate(&req);
@@ -568,7 +583,11 @@ mod tests {
     fn absurd_bits_encodings_are_rejected_rather_than_saturated() {
         assert_eq!(target_from_bits(0x00000000), None, "zero mantissa");
         assert_eq!(target_from_bits(0x00800000), None, "sign bit");
-        assert_eq!(target_from_bits(0xff123456), None, "exponent overflows 256 bits");
+        assert_eq!(
+            target_from_bits(0xff123456),
+            None,
+            "exponent overflows 256 bits"
+        );
         // A hash can never satisfy an invalid target.
         assert!(!meets_target(&[0u8; 32], 0x00000000));
     }
@@ -590,7 +609,9 @@ mod tests {
             Ok(Policy::Custom("/tmp/v.wasm".into()))
         );
         assert!(Policy::parse("custom:").is_err());
-        assert!(Policy::parse("nonsense").unwrap_err().contains("expected one of"));
+        assert!(Policy::parse("nonsense")
+            .unwrap_err()
+            .contains("expected one of"));
     }
 
     #[test]
@@ -600,7 +621,9 @@ mod tests {
         assert!(Policy::Bitcoin(bitcoin::Network::Bitcoin)
             .describe()
             .contains("retarget schedule NOT validated"));
-        assert!(Policy::AuxPow.describe().contains("proof of work NOT validated"));
+        assert!(Policy::AuxPow
+            .describe()
+            .contains("proof of work NOT validated"));
         assert!(Policy::Continuity.describe().contains("no proof of work"));
     }
 }

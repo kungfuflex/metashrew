@@ -176,28 +176,31 @@ mod tests {
     #[test]
     fn test_performance_improvement() {
         use std::time::Instant;
-        
+
         let key = b"test_key_for_performance_measurement";
         let iterations = 10000;
-        
+
         // Test old method (hex encoding)
         let start = Instant::now();
         for _ in 0..iterations {
             let _result = format!("current:{}", hex::encode(key)).into_bytes();
         }
         let old_duration = start.elapsed();
-        
+
         // Test new method (raw bytes)
         let start = Instant::now();
         for _ in 0..iterations {
             let _result = make_current_key(b"current:", key);
         }
         let new_duration = start.elapsed();
-        
+
         println!("Old method: {:?}", old_duration);
         println!("New method: {:?}", new_duration);
-        println!("Speedup: {:.2}x", old_duration.as_nanos() as f64 / new_duration.as_nanos() as f64);
-        
+        println!(
+            "Speedup: {:.2}x",
+            old_duration.as_nanos() as f64 / new_duration.as_nanos() as f64
+        );
+
         // New method should be significantly faster
         assert!(new_duration < old_duration);
     }

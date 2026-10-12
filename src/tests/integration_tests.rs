@@ -15,9 +15,7 @@ use std::collections::HashMap;
 fn get_blocktracker(adapter: &MemStoreAdapter, height: u32) -> Result<Vec<u8>> {
     let smt_helper = SMTHelper::new(adapter.clone());
     let key = b"/blocktracker".to_vec();
-    Ok(smt_helper
-        .get_at_height(&key, height)?
-        .unwrap_or_default())
+    Ok(smt_helper.get_at_height(&key, height)?.unwrap_or_default())
 }
 
 fn get_indexed_block(adapter: &MemStoreAdapter, height: u32) -> Result<Option<Vec<u8>>> {

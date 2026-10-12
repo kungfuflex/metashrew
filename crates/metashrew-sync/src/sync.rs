@@ -179,12 +179,7 @@ pub fn atomic_retry_backoff_ms(attempt: u32) -> u64 {
 /// happen in steady-state and indicates the storage tip advanced from under
 /// us — typically a sign that *something* is very wrong, but we still keep
 /// retrying because the operator can SIGKILL to escalate).
-pub fn log_atomic_retry_failure(
-    op_label: &str,
-    height: u32,
-    attempt: u32,
-    err_str: &str,
-) {
+pub fn log_atomic_retry_failure(op_label: &str, height: u32, attempt: u32, err_str: &str) {
     // "out-of-order commit rejected" is the signature emitted by
     // `commit_atomic`'s strict-in-order check (see traits.rs and the
     // RocksDB adapter). If we hit it during a retry loop, the tip has
@@ -302,20 +297,28 @@ where
                     StartupHealOutcome::Healed { from, healed_to } => {
                         warn!(
                             "startup-heal: applied (from={} healed_to={}); resuming sync from {}",
-                            from, healed_to, healed_to + 1
+                            from,
+                            healed_to,
+                            healed_to + 1
                         );
                     }
                     StartupHealOutcome::AlreadyConsistent { tip } => {
                         info!("startup-heal: pointers consistent at tip {}", tip);
                     }
                     StartupHealOutcome::Disabled => {
-                        info!("startup-heal: disabled by config; trusting __INTERNAL/height = {}", h);
+                        info!(
+                            "startup-heal: disabled by config; trusting __INTERNAL/height = {}",
+                            h
+                        );
                     }
                 }
                 h
             }
             Err(e) => {
-                error!("startup-heal: FAILED ({}); refusing to advance with divergent state — exiting", e);
+                error!(
+                    "startup-heal: FAILED ({}); refusing to advance with divergent state — exiting",
+                    e
+                );
                 // We can't `?` here because init returns (). The
                 // production stack treats startup-heal failure as a
                 // hard stop: log loudly and panic, so the operator
@@ -328,21 +331,20 @@ where
         let (indexed_height, start_height) = {
             let storage = self.storage.read().await;
             let indexed_height = storage.get_indexed_height().await.unwrap_or(0);
-            let start_height = if self.config.start_block > 0 && self.config.start_block > indexed_height {
-                self.config.start_block
-            } else if indexed_height > 0 {
-                indexed_height + 1
-            } else {
-                self.config.start_block
-            };
+            let start_height =
+                if self.config.start_block > 0 && self.config.start_block > indexed_height {
+                    self.config.start_block
+                } else if indexed_height > 0 {
+                    indexed_height + 1
+                } else {
+                    self.config.start_block
+                };
             (indexed_height, start_height)
         };
 
         // Sanity: heal-returned tip should match the re-read indexed_height.
         // If it doesn't, the heal did something we didn't intend.
-        if indexed_height != healed_tip
-            && !(indexed_height == 0 && healed_tip == 0)
-        {
+        if indexed_height != healed_tip && !(indexed_height == 0 && healed_tip == 0) {
             warn!(
                 "startup-heal: post-heal indexed_height ({}) != healed_tip ({}); using indexed_height",
                 indexed_height, healed_tip
@@ -358,10 +360,12 @@ where
             if let Ok(None) = state_root {
                 let empty_state_root = vec![0u8; 32];
                 let mut storage = self.storage.write().await;
-                storage.store_state_root(prev_height, &empty_state_root).await.unwrap();
+                storage
+                    .store_state_root(prev_height, &empty_state_root)
+                    .await
+                    .unwrap();
             }
         }
-
 
         self.current_height.store(start_height, Ordering::SeqCst);
     }
@@ -471,7 +475,6 @@ where
         }
     }
 
-
     /// Install an opt-in chain-validation policy.
     ///
     /// Replaces the built-in continuity check for every subsequent
@@ -490,9 +493,14 @@ where
     /// 2. Verifies the block's prev_blockhash matches our computed hash of the previous block
     ///
     /// This is more secure than trusting stored hashes - we verify the actual block data.
-    async fn validate_block_connects(&self, height: u32, block_data: &[u8], provided_hash: &[u8]) -> SyncResult<bool> {
+    async fn validate_block_connects(
+        &self,
+        height: u32,
+        block_data: &[u8],
+        provided_hash: &[u8],
+    ) -> SyncResult<bool> {
         use bitcoin::consensus::Encodable;
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
 
         // Opt-in policy takes over completely when configured. The
         // inline checks below stay as the default so behaviour is
@@ -533,21 +541,27 @@ where
 
             let verdict = validator.validate(&req);
             if !verdict.accepted {
-                error!("\u{26a0} SPV REJECT at height {}: {}", height, verdict.reason);
+                error!(
+                    "\u{26a0} SPV REJECT at height {}: {}",
+                    height, verdict.reason
+                );
             }
             return Ok(verdict.accepted);
         }
 
         // Decode the block
-        let block: bitcoin::Block = bitcoin::consensus::deserialize(block_data)
-            .map_err(|e| SyncError::BlockProcessing {
+        let block: bitcoin::Block = bitcoin::consensus::deserialize(block_data).map_err(|e| {
+            SyncError::BlockProcessing {
                 height,
                 message: format!("Failed to deserialize block: {}", e),
-            })?;
+            }
+        })?;
 
         // Step 1: Compute block hash from header (double SHA256)
         let mut header_bytes = Vec::with_capacity(80);
-        block.header.consensus_encode(&mut header_bytes)
+        block
+            .header
+            .consensus_encode(&mut header_bytes)
             .map_err(|e| SyncError::BlockProcessing {
                 height,
                 message: format!("Failed to encode block header: {}", e),
@@ -654,9 +668,17 @@ where
     ///    atomic commit succeeds. The operator can SIGKILL to escalate if
     ///    needed. There is also no silent fallback to a different code
     ///    path with different write semantics.
-    pub async fn process_block(&self, height: u32, block_data: Vec<u8>, block_hash: Vec<u8>) -> SyncResult<()> {
+    pub async fn process_block(
+        &self,
+        height: u32,
+        block_data: Vec<u8>,
+        block_hash: Vec<u8>,
+    ) -> SyncResult<()> {
         // 1. SPV-style continuity check.
-        if !self.validate_block_connects(height, &block_data, &block_hash).await? {
+        if !self
+            .validate_block_connects(height, &block_data, &block_hash)
+            .await?
+        {
             return Err(SyncError::BlockProcessing {
                 height,
                 message: format!(
@@ -710,7 +732,12 @@ where
                     let commit_res = {
                         let mut storage = self.storage.write().await;
                         storage
-                            .commit_atomic(height, &result.block_hash, &result.state_root, &result.batch_data)
+                            .commit_atomic(
+                                height,
+                                &result.block_hash,
+                                &result.state_root,
+                                &result.batch_data,
+                            )
                             .await
                     };
                     match commit_res {
@@ -745,30 +772,17 @@ where
                                      surfacing immediately for reorg handling",
                                     height, msg
                                 );
-                                return Err(SyncError::Storage(format!(
-                                    "commit_atomic: {}",
-                                    msg
-                                )));
+                                return Err(SyncError::Storage(format!("commit_atomic: {}", msg)));
                             }
 
-                            log_atomic_retry_failure(
-                                "atomic commit",
-                                height,
-                                attempt,
-                                &msg,
-                            );
+                            log_atomic_retry_failure("atomic commit", height, attempt, &msg);
                             last_err = Some(format!("commit_atomic: {}", msg));
                         }
                     }
                 }
                 Err(atomic_err) => {
                     let msg = format!("{}", atomic_err);
-                    log_atomic_retry_failure(
-                        "atomic block execution",
-                        height,
-                        attempt,
-                        &msg,
-                    );
+                    log_atomic_retry_failure("atomic block execution", height, attempt, &msg);
                     last_err = Some(format!("process_block_atomic: {}", msg));
                 }
             }
@@ -809,7 +823,8 @@ where
         info!("Starting sync pipeline with size {}", pipeline_size);
 
         // Create channels for the pipeline
-        let (block_sender, mut block_receiver) = mpsc::channel::<(u32, Vec<u8>, Vec<u8>)>(pipeline_size);
+        let (block_sender, mut block_receiver) =
+            mpsc::channel::<(u32, Vec<u8>, Vec<u8>)>(pipeline_size);
         let (result_sender, mut result_receiver) = mpsc::channel::<BlockResult>(pipeline_size);
 
         // Spawn block fetcher task
@@ -836,7 +851,9 @@ where
                     };
 
                     // Check for reorgs only when close to the tip
-                    if remote_tip.saturating_sub(current_height) <= self_clone.config.reorg_check_threshold {
+                    if remote_tip.saturating_sub(current_height)
+                        <= self_clone.config.reorg_check_threshold
+                    {
                         match handle_reorg(
                             current_height,
                             self_clone.node.clone(),
@@ -849,7 +866,9 @@ where
                             Ok(new_height) => {
                                 if new_height != current_height {
                                     info!("Reorg handled. Resuming from height {}", new_height);
-                                    self_clone.current_height.store(new_height, Ordering::SeqCst);
+                                    self_clone
+                                        .current_height
+                                        .store(new_height, Ordering::SeqCst);
                                 }
                                 current_height = new_height;
                             }
@@ -897,7 +916,8 @@ where
                                 block_info.data.len()
                             );
                             {
-                                let mut processing_heights = self_clone.processing_heights.lock().await;
+                                let mut processing_heights =
+                                    self_clone.processing_heights.lock().await;
                                 processing_heights.insert(current_height);
                             }
                             if block_sender
@@ -925,14 +945,18 @@ where
             let result_sender = result_sender.clone();
 
             tokio::spawn(async move {
-                while let Some((block_height, block_data, block_hash)) = block_receiver.recv().await {
+                while let Some((block_height, block_data, block_hash)) = block_receiver.recv().await
+                {
                     info!(
                         "Processing block {} ({} bytes)",
                         block_height,
                         block_data.len()
                     );
 
-                    let result = match sync_engine.process_block(block_height, block_data, block_hash).await {
+                    let result = match sync_engine
+                        .process_block(block_height, block_data, block_hash)
+                        .await
+                    {
                         Ok(_) => BlockResult::Success(block_height),
                         Err(e) => BlockResult::Error(block_height, e.to_string()),
                     };
@@ -951,7 +975,8 @@ where
             let height = match result {
                 BlockResult::Success(processed_height) => {
                     info!("Block {} successfully processed", processed_height);
-                    self.current_height.store(processed_height + 1, Ordering::SeqCst);
+                    self.current_height
+                        .store(processed_height + 1, Ordering::SeqCst);
                     {
                         let mut processing_heights = self.processing_heights.lock().await;
                         processing_heights.remove(&processed_height);
@@ -981,7 +1006,10 @@ where
                         || error.contains("CHAIN DISCONTINUITY")
                         || error.contains("out-of-order commit rejected")
                     {
-                        warn!("Chain discontinuity detected at height {}. Triggering reorg handling.", failed_height);
+                        warn!(
+                            "Chain discontinuity detected at height {}. Triggering reorg handling.",
+                            failed_height
+                        );
 
                         // Trigger reorg handling to find common ancestor and rollback
                         match handle_reorg(
@@ -1085,7 +1113,12 @@ where
     /// handled by the result-handling loop). Atomic-only, infinite retry
     /// with exponential backoff — block until the commit succeeds; same
     /// invariants as the non-pipeline path.
-    async fn process_block(&self, height: u32, block_data: Vec<u8>, block_hash: Vec<u8>) -> SyncResult<()> {
+    async fn process_block(
+        &self,
+        height: u32,
+        block_data: Vec<u8>,
+        block_hash: Vec<u8>,
+    ) -> SyncResult<()> {
         let mut attempt: u32 = 0;
         loop {
             attempt = attempt.saturating_add(1);
@@ -1106,7 +1139,12 @@ where
                     let commit_res = {
                         let mut storage = self.storage.write().await;
                         storage
-                            .commit_atomic(height, &result.block_hash, &result.state_root, &result.batch_data)
+                            .commit_atomic(
+                                height,
+                                &result.block_hash,
+                                &result.state_root,
+                                &result.batch_data,
+                            )
                             .await
                     };
                     match commit_res {
@@ -1224,7 +1262,6 @@ where
         let block_hash = self.node.get_block_hash(height).await?;
         self.process_block(height, block_data, block_hash).await
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -1302,7 +1339,10 @@ where
         let storage_guard = storage.read().await;
         let h = storage_guard.get_indexed_height().await.unwrap_or(0);
         drop(storage_guard);
-        debug!("startup-heal disabled by config; trusting __INTERNAL/height = {}", h);
+        debug!(
+            "startup-heal disabled by config; trusting __INTERNAL/height = {}",
+            h
+        );
         return Ok((h, StartupHealOutcome::Disabled));
     }
 
@@ -1335,7 +1375,12 @@ where
     if all_agree && indexed_height == 0 {
         // Fresh DB (or genesis): nothing to heal.
         info!("startup-heal: fresh DB (all pointers 0); no heal needed");
-        return Ok((indexed_height, StartupHealOutcome::AlreadyConsistent { tip: indexed_height }));
+        return Ok((
+            indexed_height,
+            StartupHealOutcome::AlreadyConsistent {
+                tip: indexed_height,
+            },
+        ));
     }
 
     // --- Step 3: pick min-wins candidate ---
@@ -1351,7 +1396,10 @@ where
     if all_agree && bitcoind_reachable {
         // Verify candidate against bitcoind. If they agree, we're clean.
         let storage_guard = storage.read().await;
-        let stored = storage_guard.get_block_hash(candidate).await.unwrap_or(None);
+        let stored = storage_guard
+            .get_block_hash(candidate)
+            .await
+            .unwrap_or(None);
         drop(storage_guard);
         if let Some(stored_hash) = stored {
             match node.get_block_hash(candidate).await {
@@ -1360,7 +1408,10 @@ where
                         "startup-heal: all pointers agree at height {} and bitcoind confirms; clean state",
                         candidate
                     );
-                    return Ok((candidate, StartupHealOutcome::AlreadyConsistent { tip: candidate }));
+                    return Ok((
+                        candidate,
+                        StartupHealOutcome::AlreadyConsistent { tip: candidate },
+                    ));
                 }
                 Ok(remote_hash) => {
                     warn!(
@@ -1376,7 +1427,10 @@ where
                         "startup-heal: bitcoind unreachable for height {} ({}); trusting local pointers",
                         candidate, e
                     );
-                    return Ok((candidate, StartupHealOutcome::AlreadyConsistent { tip: candidate }));
+                    return Ok((
+                        candidate,
+                        StartupHealOutcome::AlreadyConsistent { tip: candidate },
+                    ));
                 }
             }
         } else {
@@ -1411,10 +1465,7 @@ where
                         break;
                     }
                     Ok(_remote_hash) => {
-                        warn!(
-                            "startup-heal: hash mismatch at height {}; walking back",
-                            h
-                        );
+                        warn!("startup-heal: hash mismatch at height {}; walking back", h);
                     }
                     Err(e) => {
                         warn!(
@@ -1459,14 +1510,26 @@ where
             return Err(e);
         }
         drop(storage_guard);
-        info!("startup-heal: rolled back to height {} successfully", safe_height);
-        Ok((safe_height, StartupHealOutcome::Healed { from, healed_to: safe_height }))
+        info!(
+            "startup-heal: rolled back to height {} successfully",
+            safe_height
+        );
+        Ok((
+            safe_height,
+            StartupHealOutcome::Healed {
+                from,
+                healed_to: safe_height,
+            },
+        ))
     } else {
         info!(
             "startup-heal: pointers consistent at height {} after walk-back (no write needed)",
             safe_height
         );
-        Ok((safe_height, StartupHealOutcome::AlreadyConsistent { tip: safe_height }))
+        Ok((
+            safe_height,
+            StartupHealOutcome::AlreadyConsistent { tip: safe_height },
+        ))
     }
 }
 
@@ -1489,7 +1552,8 @@ where
         return Ok(0);
     }
     // Find the common ancestor
-    while check_height > 0 && check_height >= current_height.saturating_sub(config.max_reorg_depth) {
+    while check_height > 0 && check_height >= current_height.saturating_sub(config.max_reorg_depth)
+    {
         let storage_guard = storage.read().await;
         let local_hash = match storage_guard.get_block_hash(check_height).await {
             Ok(Some(hash)) => hash,
@@ -1503,7 +1567,10 @@ where
         let remote_hash = match node.get_block_hash(check_height).await {
             Ok(hash) => hash,
             Err(e) => {
-                error!("Failed to get remote block hash at height {}: {}", check_height, e);
+                error!(
+                    "Failed to get remote block hash at height {}: {}",
+                    check_height, e
+                );
                 return Ok(current_height); // Don't reorg if node is failing
             }
         };

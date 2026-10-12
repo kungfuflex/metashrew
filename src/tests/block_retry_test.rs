@@ -13,11 +13,13 @@ use log::{info, warn};
 use memshrew_runtime::MemStoreAdapter;
 use metashrew_runtime::smt::SMTHelper;
 use metashrew_sync::{
-    adapters::MetashrewRuntimeAdapter, BitcoinNodeAdapter, BlockInfo, ChainTip, RuntimeAdapter, AtomicBlockResult, ViewCall, PreviewCall, ViewResult, SyncConfig, SyncEngine, SyncError, SyncResult, RuntimeStats,
+    adapters::MetashrewRuntimeAdapter, AtomicBlockResult, BitcoinNodeAdapter, BlockInfo, ChainTip,
+    PreviewCall, RuntimeAdapter, RuntimeStats, SyncConfig, SyncEngine, SyncError, SyncResult,
+    ViewCall, ViewResult,
 };
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use std::collections::HashMap;
 
 /// A mock Bitcoin node that fails a few times then succeeds
 #[derive(Clone)]
@@ -39,13 +41,19 @@ impl RetryingMockNode {
     async fn should_fail(&self, height: u32) -> bool {
         let mut counts = self.failure_counts.lock().await;
         let current_failures = counts.entry(height).or_insert(0);
-        
+
         if *current_failures < self.max_failures_per_block {
             *current_failures += 1;
-            warn!("Simulating failure #{} for block {}", *current_failures, height);
+            warn!(
+                "Simulating failure #{} for block {}",
+                *current_failures, height
+            );
             true
         } else {
-            info!("Block {} will succeed after {} failures", height, *current_failures);
+            info!(
+                "Block {} will succeed after {} failures",
+                height, *current_failures
+            );
             false
         }
     }
@@ -74,19 +82,16 @@ impl BitcoinNodeAdapter for RetryingMockNode {
 
     async fn get_block_info(&self, height: u32) -> SyncResult<BlockInfo> {
         if self.should_fail(height).await {
-            return Err(metashrew_sync::SyncError::BitcoinNode(
-                format!("Simulated temporary failure for block {}", height)
-            ));
+            return Err(metashrew_sync::SyncError::BitcoinNode(format!(
+                "Simulated temporary failure for block {}",
+                height
+            )));
         }
         let hash = self.get_block_hash(height).await?;
         let chain = self.chain.lock().await;
         let block = chain.get_block(height).unwrap();
         let data = metashrew_support::utils::consensus_encode(block)?;
-        Ok(BlockInfo {
-            height,
-            hash,
-            data,
-        })
+        Ok(BlockInfo { height, hash, data })
     }
 
     async fn get_chain_tip(&self) -> SyncResult<ChainTip> {
@@ -112,27 +117,29 @@ fn get_indexed_block(adapter: &MemStoreAdapter, height: u32) -> Result<Option<Ve
 async fn test_block_retry_fix() -> Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
     info!("Block retry fix test started");
-    
+
     let config = TestConfig::new();
     let shared_adapter = MemStoreAdapter::new();
 
     // Create a chain with 10 blocks
     let chain = ChainBuilder::new().add_blocks(10);
-    
+
     // Create a node that fails 2 times per block before succeeding
     let retrying_node = RetryingMockNode::new(chain.clone(), 2);
-    
+
     let mut config_engine = wasmtime::Config::default();
     config_engine.async_support(true);
     let engine = wasmtime::Engine::new(&config_engine)?;
-    
-    let runtime = config.create_runtime_from_adapter(shared_adapter.clone(), engine).await?;
+
+    let runtime = config
+        .create_runtime_from_adapter(shared_adapter.clone(), engine)
+        .await?;
     let runtime_adapter = MetashrewRuntimeAdapter::new(runtime);
     let counting_adapter = CountingRuntimeAdapter::new(runtime_adapter);
-    
+
     let sync_config = SyncConfig {
         start_block: 0,
-        exit_at: Some(11), // Process blocks 0-10
+        exit_at: Some(11),      // Process blocks 0-10
         pipeline_size: Some(4), // Use a larger pipeline to test concurrency
         max_reorg_depth: 100,
         reorg_check_threshold: 6,
@@ -154,7 +161,7 @@ async fn test_block_retry_fix() -> Result<()> {
     info!("Checking that all blocks were indexed...");
     let mut indexed_blocks = Vec::new();
     let mut missing_blocks = Vec::new();
-    
+
     for height in 0..=10 {
         if get_indexed_block(&shared_adapter, height)?.is_some() {
             indexed_blocks.push(height);
@@ -186,11 +193,15 @@ async fn test_block_retry_fix() -> Result<()> {
     let counts = counting_adapter.call_counts.lock().await;
     for height in 0..=10 {
         let count = counts.get(&height).unwrap_or(&0);
-        assert_eq!(*count, 1, "Block {} should be processed exactly once, but was processed {} times", height, count);
+        assert_eq!(
+            *count, 1,
+            "Block {} should be processed exactly once, but was processed {} times",
+            height, count
+        );
     }
 
     info!("Block retry fix test passed! All blocks were successfully indexed despite failures and processed exactly once.");
-    
+
     Ok(())
 }
 
@@ -198,24 +209,26 @@ async fn test_block_retry_fix() -> Result<()> {
 async fn test_snapshot_sync_retry_fix() -> Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
     info!("Snapshot sync retry fix test started");
-    
+
     let config = TestConfig::new();
     let shared_adapter = MemStoreAdapter::new();
 
     // Create a chain with 10 blocks
     let chain = ChainBuilder::new().add_blocks(10);
-    
+
     // Create a node that fails 2 times per block before succeeding
     let retrying_node = RetryingMockNode::new(chain.clone(), 2);
     let mut config_engine = wasmtime::Config::default();
     config_engine.async_support(true);
     let engine = wasmtime::Engine::new(&config_engine)?;
-    let runtime = config.create_runtime_from_adapter(shared_adapter.clone(), engine).await?;
+    let runtime = config
+        .create_runtime_from_adapter(shared_adapter.clone(), engine)
+        .await?;
     let runtime_adapter = MetashrewRuntimeAdapter::new(runtime);
-    
+
     let sync_config = SyncConfig {
         start_block: 0,
-        exit_at: Some(11), // Process blocks 0-10
+        exit_at: Some(11),      // Process blocks 0-10
         pipeline_size: Some(1), // Single-threaded to make the test deterministic
         max_reorg_depth: 100,
         reorg_check_threshold: 6,
@@ -238,7 +251,7 @@ async fn test_snapshot_sync_retry_fix() -> Result<()> {
     info!("Checking that all blocks were indexed...");
     let mut indexed_blocks = Vec::new();
     let mut missing_blocks = Vec::new();
-    
+
     for height in 0..=10 {
         if get_indexed_block(&shared_adapter, height)?.is_some() {
             indexed_blocks.push(height);
@@ -267,10 +280,9 @@ async fn test_snapshot_sync_retry_fix() -> Result<()> {
     );
 
     info!("Snapshot sync retry fix test passed! All blocks were successfully indexed despite failures.");
-    
+
     Ok(())
 }
-
 
 #[derive(Clone)]
 struct CountingRuntimeAdapter<T: RuntimeAdapter> {
@@ -303,13 +315,15 @@ impl<T: RuntimeAdapter + Clone + Send + Sync> RuntimeAdapter for CountingRuntime
     ) -> SyncResult<AtomicBlockResult> {
         let mut counts = self.call_counts.lock().await;
         *counts.entry(height).or_insert(0) += 1;
-        self.inner.process_block_atomic(height, block_data, block_hash).await
+        self.inner
+            .process_block_atomic(height, block_data, block_hash)
+            .await
     }
 
     async fn get_state_root(&self, height: u32) -> SyncResult<Vec<u8>> {
         self.inner.get_state_root(height).await
     }
-    
+
     async fn execute_view(&self, call: ViewCall) -> SyncResult<ViewResult> {
         self.inner.execute_view(call).await
     }
@@ -317,7 +331,7 @@ impl<T: RuntimeAdapter + Clone + Send + Sync> RuntimeAdapter for CountingRuntime
     async fn execute_preview(&self, call: PreviewCall) -> SyncResult<ViewResult> {
         self.inner.execute_preview(call).await
     }
-    
+
     async fn refresh_memory(&self) -> SyncResult<()> {
         self.inner.refresh_memory().await
     }
@@ -354,7 +368,9 @@ impl CrashingRuntimeAdapter {
 impl RuntimeAdapter for CrashingRuntimeAdapter {
     async fn process_block(&self, height: u32, _block_data: &[u8]) -> SyncResult<()> {
         if height == self.crash_at_height {
-            return Err(SyncError::Runtime("indexer exited unexpectedly".to_string()));
+            return Err(SyncError::Runtime(
+                "indexer exited unexpectedly".to_string(),
+            ));
         }
         let mut processed = self.processed_heights.lock().await;
         if !processed.contains(&height) {
@@ -370,7 +386,9 @@ impl RuntimeAdapter for CrashingRuntimeAdapter {
         block_hash: &[u8],
     ) -> SyncResult<AtomicBlockResult> {
         if height == self.crash_at_height {
-            return Err(SyncError::Runtime("indexer exited unexpectedly".to_string()));
+            return Err(SyncError::Runtime(
+                "indexer exited unexpectedly".to_string(),
+            ));
         }
         let mut processed = self.processed_heights.lock().await;
         if !processed.contains(&height) {
@@ -387,7 +405,7 @@ impl RuntimeAdapter for CrashingRuntimeAdapter {
     async fn get_state_root(&self, _height: u32) -> SyncResult<Vec<u8>> {
         Ok(vec![0; 32])
     }
-    
+
     async fn execute_view(&self, _call: ViewCall) -> SyncResult<ViewResult> {
         unimplemented!()
     }
@@ -395,7 +413,7 @@ impl RuntimeAdapter for CrashingRuntimeAdapter {
     async fn execute_preview(&self, _call: PreviewCall) -> SyncResult<ViewResult> {
         unimplemented!()
     }
-    
+
     async fn refresh_memory(&self) -> SyncResult<()> {
         Ok(())
     }
@@ -421,7 +439,7 @@ async fn test_abort_on_critical_failure() -> Result<()> {
     let chain = ChainBuilder::new().add_blocks(10);
     let node = RetryingMockNode::new(chain.clone(), 0); // No retries, should succeed
     let storage = MemStoreAdapter::new();
-    
+
     let crash_height = 5;
     let runtime_adapter = CrashingRuntimeAdapter::new(crash_height);
 
@@ -456,12 +474,22 @@ async fn test_abort_on_critical_failure() -> Result<()> {
 
     // Check that blocks after the crash were not processed
     let processed_heights = runtime_adapter.processed_heights.lock().await;
-    assert!(!processed_heights.contains(&(crash_height)), "Block at crash height should not be processed");
-    assert!(!processed_heights.contains(&(crash_height + 1)), "Blocks after crash height should not be processed");
-    
+    assert!(
+        !processed_heights.contains(&(crash_height)),
+        "Block at crash height should not be processed"
+    );
+    assert!(
+        !processed_heights.contains(&(crash_height + 1)),
+        "Blocks after crash height should not be processed"
+    );
+
     // Check that blocks before the crash were processed
     for height in 0..crash_height {
-        assert!(processed_heights.contains(&height), "Block {} should have been processed", height);
+        assert!(
+            processed_heights.contains(&height),
+            "Block {} should have been processed",
+            height
+        );
     }
 
     info!("Abort on critical failure test passed!");

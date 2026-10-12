@@ -53,17 +53,20 @@ impl SmtRollback for RocksDBStorageAdapter {
     }
 
     fn delete_key(&mut self, key: &[u8]) -> anyhow::Result<()> {
-        self.db.delete(key)
+        self.db
+            .delete(key)
             .map_err(|e| anyhow::anyhow!("Failed to delete key: {}", e))
     }
 
     fn put_key(&mut self, key: &[u8], value: &[u8]) -> anyhow::Result<()> {
-        self.db.put(key, value)
+        self.db
+            .put(key, value)
             .map_err(|e| anyhow::anyhow!("Failed to put key: {}", e))
     }
 
     fn get_value(&self, key: &[u8]) -> anyhow::Result<Option<Vec<u8>>> {
-        self.db.get(key)
+        self.db
+            .get(key)
             .map_err(|e| anyhow::anyhow!("Failed to get value: {}", e))
     }
 
@@ -201,13 +204,16 @@ impl StorageAdapter for RocksDBStorageAdapter {
     async fn get_runtime_tip_height(&self) -> SyncResult<u32> {
         match self.db.get(RUNTIME_TIP_HEIGHT_KEY) {
             Ok(Some(value)) if value.len() >= 4 => {
-                let bytes: [u8; 4] = value[..4]
-                    .try_into()
-                    .map_err(|_| SyncError::Storage("Invalid runtime-tip-height data".to_string()))?;
+                let bytes: [u8; 4] = value[..4].try_into().map_err(|_| {
+                    SyncError::Storage("Invalid runtime-tip-height data".to_string())
+                })?;
                 Ok(u32::from_le_bytes(bytes))
             }
             Ok(_) => Ok(0),
-            Err(e) => Err(SyncError::Storage(format!("Database error reading runtime tip: {}", e))),
+            Err(e) => Err(SyncError::Storage(format!(
+                "Database error reading runtime tip: {}",
+                e
+            ))),
         }
     }
 
@@ -241,7 +247,12 @@ impl StorageAdapter for RocksDBStorageAdapter {
             match self.db.get(&key) {
                 Ok(Some(_)) => return Ok(h),
                 Ok(None) => {}
-                Err(e) => return Err(SyncError::Storage(format!("DB error during blockhash scan: {}", e))),
+                Err(e) => {
+                    return Err(SyncError::Storage(format!(
+                        "DB error during blockhash scan: {}",
+                        e
+                    )))
+                }
             }
             if h <= floor || h == 0 {
                 return Ok(0);
@@ -408,6 +419,11 @@ impl StorageAdapter for RocksDBStorageAdapter {
         // flushes could lose the write after we returned Ok.
         self.db
             .write_opt(batch, &sync_write_options())
-            .map_err(|e| SyncError::Storage(format!("commit_atomic write failed at height {}: {}", height, e)))
+            .map_err(|e| {
+                SyncError::Storage(format!(
+                    "commit_atomic write failed at height {}: {}",
+                    height, e
+                ))
+            })
     }
 }

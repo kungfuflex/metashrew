@@ -112,11 +112,7 @@ impl BitcoinNodeAdapter for MockNode {
     async fn get_block_info(&self, height: u32) -> SyncResult<BlockInfo> {
         let hash = self.get_block_hash(height).await?;
         let data = self.get_block_data(height).await?;
-        Ok(BlockInfo {
-            height,
-            hash,
-            data,
-        })
+        Ok(BlockInfo { height, hash, data })
     }
 
     async fn get_chain_tip(&self) -> SyncResult<ChainTip> {
@@ -353,7 +349,10 @@ async fn test_scenario_2_tx_vanishes_in_reorg() -> Result<()> {
     let node = MockNode::new(chain_a.clone());
     sync_chain(&config, storage.clone(), node.clone(), 6).await?;
     let outp_a = get_outpoint(&storage, txid_x, 1, 5)?;
-    assert_eq!(outp_a.as_deref(), Some(0xCAFEBABEu64.to_le_bytes().as_slice()));
+    assert_eq!(
+        outp_a.as_deref(),
+        Some(0xCAFEBABEu64.to_le_bytes().as_slice())
+    );
 
     // Chain B forks from height 1: same height 1, but height 2 onward is
     // empty (tx X never re-mines). Salt + 6 blocks so chain B is strictly
@@ -552,11 +551,19 @@ async fn test_scenario_4_multi_tx_reorg_different_replay_order() -> Result<()> {
     // the new ordering [tx3, tx1, tx2].
     let order_b_h2 = get_txids_at_height(&storage, 2, 6)?.unwrap_or_default();
     // Height 2 in chain B has only the coinbase (1 tx -> 32 bytes).
-    assert_eq!(order_b_h2.len(), 32, "height 2 in chain B has only the coinbase");
+    assert_eq!(
+        order_b_h2.len(),
+        32,
+        "height 2 in chain B has only the coinbase"
+    );
 
     let order_b_h3 = get_txids_at_height(&storage, 3, 6)?.unwrap_or_default();
     assert_eq!(order_b_h3.len(), 4 * 32);
-    assert_eq!(&order_b_h3[32..64], t3.as_byte_array(), "first non-coinbase = tx3");
+    assert_eq!(
+        &order_b_h3[32..64],
+        t3.as_byte_array(),
+        "first non-coinbase = tx3"
+    );
     assert_eq!(&order_b_h3[64..96], t1.as_byte_array(), "second = tx1");
     assert_eq!(&order_b_h3[96..128], t2.as_byte_array(), "third = tx2");
 
@@ -603,9 +610,7 @@ async fn test_scenario_5_deep_reorg_mixed_activity() -> Result<()> {
     }
 
     let a_txs_clone = a_txs.clone();
-    let chain_a = build_chain_with_txs(1, 10, move |h| {
-        vec![a_txs_clone[(h - 1) as usize].clone()]
-    });
+    let chain_a = build_chain_with_txs(1, 10, move |h| vec![a_txs_clone[(h - 1) as usize].clone()]);
     let node = MockNode::new(chain_a.clone());
     sync_chain(&config, storage.clone(), node.clone(), 11).await?;
 
@@ -622,9 +627,8 @@ async fn test_scenario_5_deep_reorg_mixed_activity() -> Result<()> {
     }
 
     let b_txs_clone = b_txs.clone();
-    let chain_b = build_chain_with_txs(99, 11, move |h| {
-        vec![b_txs_clone[(h - 1) as usize].clone()]
-    });
+    let chain_b =
+        build_chain_with_txs(99, 11, move |h| vec![b_txs_clone[(h - 1) as usize].clone()]);
     node.switch_chain(chain_b.clone()).await;
     sync_chain(&config, storage.clone(), node, 12).await?;
 
@@ -669,13 +673,17 @@ async fn test_scenario_6_cpfp_parent_reorg_invalidates_child() -> Result<()> {
 
     // Parent: MINT (creates dust at vout 1 of itself)
     let (parent_outp, parent_vout) = fake_parent_outpoint(60);
-    let parent_tx =
-        build_protostone_tx(parent_outp, parent_vout, 0x60, PROTOSTONE_OP_MINT, 0xC1C2C3C4);
+    let parent_tx = build_protostone_tx(
+        parent_outp,
+        parent_vout,
+        0x60,
+        PROTOSTONE_OP_MINT,
+        0xC1C2C3C4,
+    );
     let parent_txid = parent_tx.compute_txid();
 
     // Child: TRANSFER, spending parent's vout 1.
-    let child_tx =
-        build_protostone_tx(parent_txid, 1, 0x61, PROTOSTONE_OP_TRANSFER, 0xC1C2C3C4);
+    let child_tx = build_protostone_tx(parent_txid, 1, 0x61, PROTOSTONE_OP_TRANSFER, 0xC1C2C3C4);
     let child_txid = child_tx.compute_txid();
 
     let parent_for_a = parent_tx.clone();
@@ -1056,7 +1064,11 @@ async fn test_scenario_10_already_processed_guard_does_not_block_reindex() -> Re
 
     // Per-height tx order at h=3 in chain B must contain tx_x.
     let order_b_h3 = get_txids_at_height(&storage, 3, 6)?.unwrap_or_default();
-    assert_eq!(order_b_h3.len(), 2 * 32, "coinbase + tx_x at h=3 in chain B");
+    assert_eq!(
+        order_b_h3.len(),
+        2 * 32,
+        "coinbase + tx_x at h=3 in chain B"
+    );
     assert_eq!(&order_b_h3[32..64], txid_x.as_byte_array());
 
     info!("✅ Scenario 10 passed");

@@ -4,9 +4,9 @@
 //! during blockchain reorganizations. Both RocksDB and in-memory storage adapters must
 //! implement this trait to ensure consistent reorg handling.
 
+use crate::smt::{deserialize_key_manifest, MANIFEST_PREFIX, SMT_ROOT_PREFIX};
 use anyhow::Result;
 use log::{debug, info, warn};
-use crate::smt::{MANIFEST_PREFIX, SMT_ROOT_PREFIX, deserialize_key_manifest};
 
 /// One write operation queued during rollback. Used by [`SmtRollback::apply_atomic`]
 /// so a backend that supports batching (e.g. RocksDB) can commit an entire height's
@@ -85,10 +85,16 @@ pub fn rollback_smt_data<S: SmtRollback>(
     rollback_height: u32,
     current_height: u32,
 ) -> Result<()> {
-    info!("Starting SMT rollback from height {} to height {}", current_height, rollback_height);
+    info!(
+        "Starting SMT rollback from height {} to height {}",
+        current_height, rollback_height
+    );
 
     if rollback_height >= current_height {
-        debug!("Rollback height {} >= current height {}, nothing to do", rollback_height, current_height);
+        debug!(
+            "Rollback height {} >= current height {}, nothing to do",
+            rollback_height, current_height
+        );
         return Ok(());
     }
 
@@ -129,7 +135,10 @@ pub fn rollback_smt_data<S: SmtRollback>(
             .map(|k| RollbackOp::Delete(k.clone()))
             .collect();
         storage.apply_atomic(&ops)?;
-        info!("Deleted {} metadata keys atomically", metadata_keys_to_delete.len());
+        info!(
+            "Deleted {} metadata keys atomically",
+            metadata_keys_to_delete.len()
+        );
     }
 
     base_keys.sort_unstable();
@@ -149,7 +158,9 @@ pub fn rollback_smt_data<S: SmtRollback>(
         length_key.extend_from_slice(length_suffix);
 
         let old_length = if let Some(length_bytes) = storage.get_value(&length_key)? {
-            String::from_utf8_lossy(&length_bytes).parse::<u32>().unwrap_or(0)
+            String::from_utf8_lossy(&length_bytes)
+                .parse::<u32>()
+                .unwrap_or(0)
         } else {
             continue;
         };
@@ -166,7 +177,10 @@ pub fn rollback_smt_data<S: SmtRollback>(
                     if update_height <= rollback_height {
                         valid_updates.push((i, update_data));
                     } else {
-                        debug!("Removing SMT update at height {} (> {})", update_height, rollback_height);
+                        debug!(
+                            "Removing SMT update at height {} (> {})",
+                            update_height, rollback_height
+                        );
                     }
                 }
             }
@@ -285,8 +299,7 @@ pub fn rollback_with_manifests<S: SmtRollback>(
                 // Walk backward from the end to find entries above rollback_height
                 let mut new_length = length;
                 for i in (0..length).rev() {
-                    let update_key =
-                        [key.as_slice(), b"/", i.to_string().as_bytes()].concat();
+                    let update_key = [key.as_slice(), b"/", i.to_string().as_bytes()].concat();
                     if let Some(update_data) = storage.get_value(&update_key)? {
                         if let Some(entry_height) = parse_height_from_smt_value(&update_data) {
                             if entry_height > rollback_height {
@@ -381,12 +394,24 @@ mod tests {
         };
 
         // Insert metadata for heights 3, 4, 5
-        storage.data.insert(b"block_hash_3".to_vec(), b"hash3".to_vec());
-        storage.data.insert(b"block_hash_4".to_vec(), b"hash4".to_vec());
-        storage.data.insert(b"block_hash_5".to_vec(), b"hash5".to_vec());
-        storage.data.insert(b"smt:root:3".to_vec(), b"root3".to_vec());
-        storage.data.insert(b"smt:root:4".to_vec(), b"root4".to_vec());
-        storage.data.insert(b"smt:root:5".to_vec(), b"root5".to_vec());
+        storage
+            .data
+            .insert(b"block_hash_3".to_vec(), b"hash3".to_vec());
+        storage
+            .data
+            .insert(b"block_hash_4".to_vec(), b"hash4".to_vec());
+        storage
+            .data
+            .insert(b"block_hash_5".to_vec(), b"hash5".to_vec());
+        storage
+            .data
+            .insert(b"smt:root:3".to_vec(), b"root3".to_vec());
+        storage
+            .data
+            .insert(b"smt:root:4".to_vec(), b"root4".to_vec());
+        storage
+            .data
+            .insert(b"smt:root:5".to_vec(), b"root5".to_vec());
 
         // Rollback to height 3
         rollback_smt_data(&mut storage, 3, 5).unwrap();
@@ -423,9 +448,16 @@ mod tests {
         storage.data.insert(b"key_b/length".to_vec(), b"1".to_vec());
         storage.data.insert(b"key_b/0".to_vec(), b"1:bb".to_vec());
         let manifest1 = serialize_key_manifest(&[b"key_a", b"key_b"]);
-        storage.data.insert(format!("{}1", MANIFEST_PREFIX).into_bytes(), manifest1);
-        storage.data.insert(format!("{}1", SMT_ROOT_PREFIX).into_bytes(), b"root1".to_vec());
-        storage.data.insert(b"block_hash_1".to_vec(), b"hash1".to_vec());
+        storage
+            .data
+            .insert(format!("{}1", MANIFEST_PREFIX).into_bytes(), manifest1);
+        storage.data.insert(
+            format!("{}1", SMT_ROOT_PREFIX).into_bytes(),
+            b"root1".to_vec(),
+        );
+        storage
+            .data
+            .insert(b"block_hash_1".to_vec(), b"hash1".to_vec());
 
         // Block 2: modifies key_a, key_c
         storage.data.insert(b"key_a/length".to_vec(), b"2".to_vec());
@@ -433,29 +465,49 @@ mod tests {
         storage.data.insert(b"key_c/length".to_vec(), b"1".to_vec());
         storage.data.insert(b"key_c/0".to_vec(), b"2:cc".to_vec());
         let manifest2 = serialize_key_manifest(&[b"key_a", b"key_c"]);
-        storage.data.insert(format!("{}2", MANIFEST_PREFIX).into_bytes(), manifest2);
-        storage.data.insert(format!("{}2", SMT_ROOT_PREFIX).into_bytes(), b"root2".to_vec());
-        storage.data.insert(b"block_hash_2".to_vec(), b"hash2".to_vec());
+        storage
+            .data
+            .insert(format!("{}2", MANIFEST_PREFIX).into_bytes(), manifest2);
+        storage.data.insert(
+            format!("{}2", SMT_ROOT_PREFIX).into_bytes(),
+            b"root2".to_vec(),
+        );
+        storage
+            .data
+            .insert(b"block_hash_2".to_vec(), b"hash2".to_vec());
 
         // Block 3: modifies key_b
         storage.data.insert(b"key_b/length".to_vec(), b"2".to_vec());
         storage.data.insert(b"key_b/1".to_vec(), b"3:bb3".to_vec());
         let manifest3 = serialize_key_manifest(&[b"key_b"]);
-        storage.data.insert(format!("{}3", MANIFEST_PREFIX).into_bytes(), manifest3);
-        storage.data.insert(format!("{}3", SMT_ROOT_PREFIX).into_bytes(), b"root3".to_vec());
-        storage.data.insert(b"block_hash_3".to_vec(), b"hash3".to_vec());
+        storage
+            .data
+            .insert(format!("{}3", MANIFEST_PREFIX).into_bytes(), manifest3);
+        storage.data.insert(
+            format!("{}3", SMT_ROOT_PREFIX).into_bytes(),
+            b"root3".to_vec(),
+        );
+        storage
+            .data
+            .insert(b"block_hash_3".to_vec(), b"hash3".to_vec());
 
         // Rollback to height 1 (undo blocks 2 and 3)
         let result = rollback_with_manifests(&mut storage, 1, 3).unwrap();
         assert!(result, "fast rollback should succeed with manifests");
 
         // key_a should be back to length 1 (only block 1 entry)
-        assert_eq!(storage.data.get(b"key_a/length".as_ref()), Some(&b"1".to_vec()));
+        assert_eq!(
+            storage.data.get(b"key_a/length".as_ref()),
+            Some(&b"1".to_vec())
+        );
         assert!(storage.data.contains_key(b"key_a/0".as_ref())); // block 1 entry kept
         assert!(!storage.data.contains_key(b"key_a/1".as_ref())); // block 2 entry removed
 
         // key_b should be back to length 1 (block 3 entry removed)
-        assert_eq!(storage.data.get(b"key_b/length".as_ref()), Some(&b"1".to_vec()));
+        assert_eq!(
+            storage.data.get(b"key_b/length".as_ref()),
+            Some(&b"1".to_vec())
+        );
         assert!(storage.data.contains_key(b"key_b/0".as_ref())); // block 1 entry kept
         assert!(!storage.data.contains_key(b"key_b/1".as_ref())); // block 3 entry removed
 
@@ -464,18 +516,28 @@ mod tests {
         assert!(!storage.data.contains_key(b"key_c/0".as_ref()));
 
         // Metadata for heights 2 and 3 should be gone
-        assert!(!storage.data.contains_key(format!("{}2", SMT_ROOT_PREFIX).as_bytes()));
-        assert!(!storage.data.contains_key(format!("{}3", SMT_ROOT_PREFIX).as_bytes()));
+        assert!(!storage
+            .data
+            .contains_key(format!("{}2", SMT_ROOT_PREFIX).as_bytes()));
+        assert!(!storage
+            .data
+            .contains_key(format!("{}3", SMT_ROOT_PREFIX).as_bytes()));
         assert!(!storage.data.contains_key(b"block_hash_2".as_ref()));
         assert!(!storage.data.contains_key(b"block_hash_3".as_ref()));
 
         // Height 1 metadata should remain
-        assert!(storage.data.contains_key(format!("{}1", SMT_ROOT_PREFIX).as_bytes()));
+        assert!(storage
+            .data
+            .contains_key(format!("{}1", SMT_ROOT_PREFIX).as_bytes()));
         assert!(storage.data.contains_key(b"block_hash_1".as_ref()));
 
         // Manifests for 2 and 3 should be deleted
-        assert!(!storage.data.contains_key(format!("{}2", MANIFEST_PREFIX).as_bytes()));
-        assert!(!storage.data.contains_key(format!("{}3", MANIFEST_PREFIX).as_bytes()));
+        assert!(!storage
+            .data
+            .contains_key(format!("{}2", MANIFEST_PREFIX).as_bytes()));
+        assert!(!storage
+            .data
+            .contains_key(format!("{}3", MANIFEST_PREFIX).as_bytes()));
     }
 
     #[test]
@@ -485,7 +547,9 @@ mod tests {
         };
 
         // No manifests — should return false for fallback
-        storage.data.insert(b"block_hash_2".to_vec(), b"hash2".to_vec());
+        storage
+            .data
+            .insert(b"block_hash_2".to_vec(), b"hash2".to_vec());
         let result = rollback_with_manifests(&mut storage, 1, 2).unwrap();
         assert!(!result, "should fall back when manifests are missing");
     }

@@ -28,9 +28,7 @@ use log::warn;
 use std::fs;
 
 #[cfg(target_os = "linux")]
-use libc::{
-    cpu_set_t, sched_setaffinity, setpriority, CPU_SET, CPU_ZERO, PRIO_PROCESS,
-};
+use libc::{cpu_set_t, sched_setaffinity, setpriority, CPU_SET, CPU_ZERO, PRIO_PROCESS};
 
 /// Read the kernel-effective set of CPUs the calling process is
 /// allowed to run on. Returns a sorted Vec of CPU ids (0-based).

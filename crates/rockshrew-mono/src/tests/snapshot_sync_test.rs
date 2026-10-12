@@ -44,8 +44,7 @@ async fn test_snapshot_sync_basic() {
 
     // 2. Create a "snapshot" by copying all raw key-value pairs from the database
     let iter = snapshot_db.db.iterator(rocksdb::IteratorMode::Start);
-    let snapshot_data: Vec<(Box<[u8]>, Box<[u8]>)> =
-        iter.map(|item| item.unwrap()).collect();
+    let snapshot_data: Vec<(Box<[u8]>, Box<[u8]>)> = iter.map(|item| item.unwrap()).collect();
 
     // 3. Setup a new, empty repo instance
     let repo_dir = tempdir().unwrap();
@@ -61,7 +60,7 @@ async fn test_snapshot_sync_basic() {
     // 5. Verify the state of the repo instance matches the original
     let repo_instance = SMTHelper::new(repo_db.clone());
     let repo_root = repo_instance.get_current_state_root().unwrap();
-    
+
     assert_eq!(
         snapshot_root, repo_root,
         "Synced state root should match snapshot state root"
