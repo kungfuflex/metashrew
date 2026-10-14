@@ -172,7 +172,20 @@ impl StorageAdapter for RocksDBStorageAdapter {
                 .map_err(|e| SyncError::Storage(format!("SMT rollback failed: {}", e)))?;
         }
 
-        self.set_indexed_height(height).await?;
+        // Move BOTH height pointers in one synced batch. This used to be
+        // `set_indexed_height(height)` alone, which left the runtime-side
+        // `/__INTERNAL/tip-height` (written by every block's commit batch)
+        // at the pre-rollback height. That is exactly the divergence the
+        // 2026-10-14 alspo-subfrostamm restart healed:
+        //   "reconciled pointers at height 971344 (was indexed=971344,
+        //    runtime_tip=971345)"
+        // after a 1-block reorg at 971345 rolled storage back to 971344.
+        let mut batch = WriteBatch::default();
+        batch.put(INDEXED_HEIGHT_KEY, &height.to_le_bytes());
+        batch.put(RUNTIME_TIP_HEIGHT_KEY, &height.to_le_bytes());
+        self.db
+            .write_opt(batch, &sync_write_options())
+            .map_err(|e| SyncError::Storage(format!("rollback pointer write failed: {}", e)))?;
         info!("Successfully completed rollback to height {}", height);
         Ok(())
     }
