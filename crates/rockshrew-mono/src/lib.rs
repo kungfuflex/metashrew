@@ -217,6 +217,103 @@ pub(crate) fn near_tip_should_drop(last_sent: i64, candidate_height: u32) -> boo
     candidate_height < near_tip_min_send_height(last_sent)
 }
 
+/// Commit-stall fix (2026-10-14): what the near-tip path does with the
+/// block `get_next_block_data_with_floor` handed back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NearTipAction {
+    /// Send it. `reset_watermark` is true when the engine rolled storage
+    /// back during this call, in which case the fetcher's `last_sent`
+    /// watermark points past the rollback and must be cleared BEFORE the
+    /// send (the send then re-arms it at the rollback height).
+    Send { reset_watermark: bool },
+    /// A duplicate of something already enqueued.
+    Drop,
+}
+
+/// Pure decision for the near-tip path. Before this fix a rollback inside
+/// the engine was invisible here: the floor kept the fetcher at
+/// `last_sent + 1`, the rolled-back height was never re-sent, and every
+/// later block was rejected out-of-order until a restart (alspo-btcusd,
+/// alspo-subfrostamm at 971344; alspo-cbtcusd, alspo-cfire at 966499 —
+/// both real 1-block mainnet reorgs).
+pub(crate) fn near_tip_action(
+    last_sent: i64,
+    candidate_height: u32,
+    rolled_back: bool,
+) -> NearTipAction {
+    if rolled_back {
+        NearTipAction::Send { reset_watermark: true }
+    } else if near_tip_should_drop(last_sent, candidate_height) {
+        NearTipAction::Drop
+    } else {
+        NearTipAction::Send { reset_watermark: false }
+    }
+}
+
+/// Commit-stall fix (2026-10-14): counts consecutive failed blocks so a
+/// pod that cannot make progress exits non-zero instead of serving stale
+/// answers behind a green readiness probe for 19 hours.
+///
+/// Every failure triggers a cursor resync first, so a healthy pod
+/// recovers within a few blocks (the stale blocks already queued behind
+/// the failed one fail fast and are counted too, bounded by the prefetch
+/// channel). `limit == 0` disables the exit.
+#[derive(Debug, Clone)]
+pub(crate) struct StallGuard {
+    limit: u32,
+    consecutive: u32,
+}
+
+impl StallGuard {
+    pub(crate) fn new(limit: u32) -> Self {
+        Self { limit, consecutive: 0 }
+    }
+    pub(crate) fn record_success(&mut self) {
+        self.consecutive = 0;
+    }
+    /// Returns true when the process should give up and exit.
+    pub(crate) fn record_failure(&mut self) -> bool {
+        self.consecutive = self.consecutive.saturating_add(1);
+        self.limit > 0 && self.consecutive >= self.limit
+    }
+    pub(crate) fn consecutive(&self) -> u32 {
+        self.consecutive
+    }
+}
+
+/// Owns a secondary tokio runtime that lives inside `run()` (an async
+/// fn). Dropping a `Runtime` from async context panics with "Cannot drop
+/// a runtime in a context where blocking is not allowed", which is what
+/// every graceful shutdown did (actix handles SIGTERM, `run()` returns,
+/// the view runtime is dropped on the main runtime's thread). This guard
+/// shuts it down with `shutdown_background()`, which never blocks.
+pub(crate) struct BackgroundRuntime(Option<tokio::runtime::Runtime>);
+
+impl BackgroundRuntime {
+    pub(crate) fn new(rt: tokio::runtime::Runtime) -> Self {
+        Self(Some(rt))
+    }
+    pub(crate) fn handle(&self) -> tokio::runtime::Handle {
+        self.0
+            .as_ref()
+            .expect("BackgroundRuntime used after shutdown")
+            .handle()
+            .clone()
+    }
+}
+
+impl Drop for BackgroundRuntime {
+    fn drop(&mut self) {
+        if let Some(rt) = self.0.take() {
+            rt.shutdown_background();
+        }
+    }
+}
+
+/// Exit code used when `StallGuard` gives up, so it is distinguishable in
+/// `kubectl describe` from a panic (101) or a signal.
+pub const EXIT_CODE_STALLED: i32 = 75;
+
 /// Command-line arguments for `rockshrew-mono`.
 #[derive(Parser, Debug, Clone)]
 #[command(version, about, long_about = None)]
@@ -380,6 +477,14 @@ pub struct Args {
     /// workers (via cpu_isolation) and run at --view-nice priority.
     #[arg(long, env = "ROCKSHREW_VIEW_RUNTIME_WORKERS")]
     pub view_runtime_workers: Option<usize>,
+    /// Exit with code 75 after this many CONSECUTIVE failed blocks, each
+    /// of which has already been answered with a cursor resync. A pod
+    /// that is still failing after that is not going to heal by itself,
+    /// and a restart (startup heal) is the documented recovery. 0 = never
+    /// exit. The default comfortably exceeds the stale blocks that can be
+    /// queued behind one failure (prefetch channel + in-flight).
+    #[arg(long, env = "ROCKSHREW_MAX_CONSECUTIVE_BLOCK_FAILURES", default_value_t = 12)]
+    pub max_consecutive_block_failures: u32,
 }
 
 /// Shared application state for the JSON-RPC server.
@@ -935,7 +1040,7 @@ where
     });
     let view_cores_for_rt = view_cores_set.clone();
     let view_nice_for_rt = args.view_nice;
-    let view_runtime = tokio::runtime::Builder::new_multi_thread()
+    let view_runtime = BackgroundRuntime::new(tokio::runtime::Builder::new_multi_thread()
         .worker_threads(view_runtime_workers)
         .thread_name("view-worker")
         .on_thread_start(move || {
@@ -948,12 +1053,12 @@ where
         })
         .enable_all()
         .build()
-        .expect("Failed to create view runtime");
+        .expect("Failed to create view runtime"));
     info!(
         "view runtime started ({} workers, pinned to {:?})",
         view_runtime_workers, view_cores_set
     );
-    let view_runtime_handle = view_runtime.handle().clone();
+    let view_runtime_handle = view_runtime.handle();
 
     let app_state = web::Data::new(AppState {
         sync_engine: sync_engine_arc.clone(),
@@ -1098,13 +1203,24 @@ where
                     // and the processor wedges idle forever. Production
                     // saw this 2026-05-26: j stuck at 951049 for 8+ min
                     // post-commit, requiring manual pod restart to clear.
+                    let epoch_before = engine.rollback_epoch();
                     match engine
                         .get_next_block_data_with_floor(Some(min_send_height))
                         .await
                     {
                         Ok(Some((height, block_data, block_hash))) => {
+                            let rolled_back = engine.rollback_epoch() != epoch_before;
                             drop(engine);
-                            if near_tip_should_drop(last_sent_snapshot, height) {
+                            let action = near_tip_action(last_sent_snapshot, height, rolled_back);
+                            if action == (NearTipAction::Send { reset_watermark: true }) {
+                                warn!(
+                                    "FETCHER: storage rolled back during reorg check; resuming at height {} \
+                                     (last_sent was {}) — watermark reset",
+                                    height, last_sent_snapshot,
+                                );
+                                last_sent_height.store(LAST_SENT_UNSET, Ordering::SeqCst);
+                            }
+                            if action == NearTipAction::Drop {
                                 // Duplicate: the processor's atomic
                                 // has not yet caught up to what the
                                 // fetcher has already enqueued. Sleep
@@ -1128,10 +1244,16 @@ where
                             last_sent_height.fetch_max(height as i64, Ordering::SeqCst);
                         }
                         Ok(None) => {
+                            if engine.rollback_epoch() != epoch_before {
+                                last_sent_height.store(LAST_SENT_UNSET, Ordering::SeqCst);
+                            }
                             drop(engine);
                             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                         }
                         Err(e) => {
+                            if engine.rollback_epoch() != epoch_before {
+                                last_sent_height.store(LAST_SENT_UNSET, Ordering::SeqCst);
+                            }
                             error!("Failed to fetch block: {}", e);
                             drop(engine);
                             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -1306,11 +1428,13 @@ where
         })
         .expect("Failed to spawn processor thread");
 
+    let max_consecutive_block_failures = args.max_consecutive_block_failures;
     let indexer_handle = tokio::spawn({
         let sync_engine_clone = sync_engine_arc.clone();
         let last_sent_height_idx = last_sent_height.clone();
         async move {
         info!("Starting block indexing process...");
+        let mut stall_guard = StallGuard::new(max_consecutive_block_failures);
         let mut block_count = 0u64;
         let start_time = Instant::now();
 
@@ -1318,6 +1442,7 @@ where
             match result {
                 BlockResult::Success(height) => {
                     block_count += 1;
+                    stall_guard.record_success();
 
                     if block_count % 100 == 0 {
                         let elapsed = start_time.elapsed();
@@ -1330,47 +1455,48 @@ where
                 }
                 BlockResult::Error(height, error) => {
                     let error_str = error.to_string();
+                    error!("Failed to process block {}: {}", height, error_str);
 
-                    // Check if this is a chain validation error - trigger reorg handling
-                    if error_str.contains("does not connect to previous block") || error_str.contains("CHAIN DISCONTINUITY") {
-                        warn!("Chain discontinuity at height {}. Triggering reorg.", height);
-
+                    // Commit-stall fix (2026-10-14). Block `height` did NOT
+                    // commit, whatever the reason. The fetcher runs ahead of
+                    // the processor, so everything it has queued or will send
+                    // next (`last_sent + 1`, ...) is for heights whose parent
+                    // is not on disk. The old code only rewound on a chain
+                    // discontinuity, and even then never lowered the engine
+                    // cursor, so an out-of-order rejection or an exhausted
+                    // retry budget let the processor walk forward past a
+                    // block that never landed — every later commit rejected
+                    // against the same on-disk tip until a restart.
+                    //
+                    // Now EVERY failure re-anchors to the on-disk tip (the
+                    // same reconciliation the startup heal does) and clears
+                    // the fetcher watermark, so the next block attempted is
+                    // always `indexed + 1`.
+                    {
                         let engine = sync_engine_clone.read().await;
-                        match metashrew_sync::sync::handle_reorg(
-                            height,
-                            engine.node().clone(),
-                            engine.storage().clone(),
-                            engine.runtime().clone(),
-                            &engine.config,
-                        )
-                        .await
-                        {
-                            Ok(rollback_height) => {
-                                info!("Rolled back to height {}. Resuming sync.", rollback_height);
-                                // v9.0.5-rc.6: rollback dropped the
-                                // processor's tip DOWN. The fetcher's
-                                // own last-sent watermark could be
-                                // ahead of the rollback point; reset
-                                // it to UNSET so the next fetch loop
-                                // picks up processor_tip as the new
-                                // starting height. We use store, not
-                                // fetch_min, to ensure full reset —
-                                // we never want to keep a stale
-                                // last_sent past a rollback.
+                        match engine.resync_cursor_to_storage_tip().await {
+                            Ok(next_height) => {
                                 last_sent_height_idx.store(LAST_SENT_UNSET, Ordering::SeqCst);
                                 warn!(
-                                    "FETCHER: last_sent_height reset to UNSET after rollback to {} — fetcher will resume from processor_tip",
-                                    rollback_height
+                                    "resync after failed block {}: cursor re-anchored at {} (on-disk tip + 1); \
+                                     fetcher watermark reset",
+                                    height, next_height
                                 );
                             }
                             Err(e) => {
-                                error!("Failed to handle reorg: {}", e);
+                                error!("resync after failed block {} FAILED: {}", height, e);
                             }
                         }
-                        drop(engine);
                     }
 
-                    error!("Failed to process block {}: {}", height, error_str);
+                    if stall_guard.record_failure() {
+                        error!(
+                            "{} consecutive blocks failed without a successful commit (last: {}: {}); \
+                             exiting with code {} so the pod restarts and the startup heal runs",
+                            stall_guard.consecutive(), height, error_str, EXIT_CODE_STALLED
+                        );
+                        std::process::exit(EXIT_CODE_STALLED);
+                    }
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                 }
             }

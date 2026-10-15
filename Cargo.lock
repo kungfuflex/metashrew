@@ -3856,6 +3856,7 @@ dependencies = [
  "env_logger",
  "hex",
  "itertools 0.14.0",
+ "libc",
  "log",
  "memshrew-runtime",
  "metashrew-core",

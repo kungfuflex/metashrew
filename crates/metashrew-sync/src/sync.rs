@@ -662,6 +662,19 @@ where
                         }
                         Err(commit_err) => {
                             let msg = format!("{}", commit_err);
+
+                            // Deterministic: re-executing the block cannot close
+                            // the gap to the committed tip. Surface it at once so
+                            // the result loop can route it to reorg handling
+                            // (backport of upstream rc.15).
+                            if msg.contains("out-of-order commit rejected") {
+                                error!(
+                                    "Block {}: {} — not retryable; surfacing immediately for reorg handling",
+                                    height, msg
+                                );
+                                return Err(SyncError::Storage(format!("commit_atomic: {}", msg)));
+                            }
+
                             log_atomic_retry_failure(
                                 "atomic commit",
                                 height,
@@ -877,12 +890,28 @@ where
                     }
 
                     // Check if this is a chain validation error - trigger reorg handling
-                    if error.contains("does not connect to previous block") || error.contains("CHAIN DISCONTINUITY") {
+                    if error.contains("does not connect to previous block")
+                        || error.contains("CHAIN DISCONTINUITY")
+                        // rc.15 backport: an out-of-order rejection means the cursor
+                        // is ahead of storage; the generic branch never rewinds it.
+                        || error.contains("out-of-order commit rejected")
+                    {
                         warn!("Chain discontinuity detected at height {}. Triggering reorg handling.", failed_height);
 
+                        // Anchor reorg detection at the ON-DISK tip, not at the
+                        // failed height: when the cursor ran ahead of storage the
+                        // failed height has no stored parent, handle_reorg would
+                        // find "no reorg" and hand the same height back.
+                        let anchor = {
+                            let storage = self.storage.read().await;
+                            match storage.get_indexed_height().await {
+                                Ok(h) if h > 0 => failed_height.min(h + 1),
+                                _ => failed_height,
+                            }
+                        };
                         // Trigger reorg handling to find common ancestor and rollback
                         match handle_reorg(
-                            failed_height,
+                            anchor,
                             self.node.clone(),
                             self.storage.clone(),
                             self.runtime.clone(),

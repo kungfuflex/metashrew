@@ -9,7 +9,7 @@
 use async_trait::async_trait;
 use bitcoin::hashes::Hash as _;
 use log::{debug, error, info, warn};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::sync::RwLock;
@@ -47,6 +47,15 @@ where
     // State tracking
     is_running: Arc<AtomicBool>,
     current_height: Arc<AtomicU32>,
+    /// Bumped every time this engine moves its cursor DOWN because storage
+    /// was rolled back (reorg handling) or re-anchored to the on-disk tip.
+    /// Callers that keep their own fetch watermark (rockshrew-mono's
+    /// `last_sent_height`) compare epochs to learn that their watermark is
+    /// now ahead of storage and must be reset. Without this signal a
+    /// rollback performed inside `get_next_block_data_with_floor` was
+    /// invisible to the fetcher, which kept sending `last_sent + 1` past a
+    /// height that no longer existed on disk: the 2026-10-14 alspo wedge.
+    rollback_epoch: Arc<AtomicU64>,
     last_snapshot_height: Arc<AtomicU32>,
     snapshots_created: Arc<AtomicU32>,
     snapshots_applied: Arc<AtomicU32>,
@@ -80,6 +89,7 @@ where
 
             is_running: Arc::new(AtomicBool::new(false)),
             current_height: Arc::new(AtomicU32::new(0)),
+            rollback_epoch: Arc::new(AtomicU64::new(0)),
             last_snapshot_height: Arc::new(AtomicU32::new(0)),
             snapshots_created: Arc::new(AtomicU32::new(0)),
             snapshots_applied: Arc::new(AtomicU32::new(0)),
@@ -161,6 +171,59 @@ where
         self.current_height.load(Ordering::SeqCst)
     }
 
+    /// See the `rollback_epoch` field. Monotonic; changes only when the
+    /// cursor was moved down to follow storage.
+    pub fn rollback_epoch(&self) -> u64 {
+        self.rollback_epoch.load(Ordering::SeqCst)
+    }
+
+    /// Re-anchor the cursor to the ON-DISK tip after a failed block.
+    ///
+    /// The processor is fed by a fetcher that runs ahead of it, so when a
+    /// block fails to commit (for any reason: out-of-order rejection, chain
+    /// discontinuity, exhausted retry budget) the blocks already queued
+    /// behind it are for heights storage does not have a parent for. This
+    /// is the running-process equivalent of the startup heal: read
+    /// `__INTERNAL/height`, run reorg detection from `indexed + 1`, store
+    /// the result as the cursor and bump `rollback_epoch` (always: the caller's
+    /// watermark is ahead of storage whenever this is called).
+    /// Backport of upstream v9.0.5-rc.16 `resync_cursor_to_storage_tip`.
+    pub async fn resync_cursor_to_storage_tip(&self) -> SyncResult<u32> {
+        let indexed_height = {
+            let storage = self.storage.read().await;
+            storage.get_indexed_height().await?
+        };
+        // Same start-height rule as `init`.
+        let anchor = if self.config.start_block > 0 && self.config.start_block > indexed_height {
+            self.config.start_block
+        } else if indexed_height > 0 {
+            indexed_height + 1
+        } else {
+            self.config.start_block
+        };
+
+        let next_height = crate::sync::handle_reorg(
+            anchor,
+            self.node.clone(),
+            self.storage.clone(),
+            self.runtime.clone(),
+            &self.config,
+        )
+        .await?;
+
+        let previous = self.current_height.swap(next_height, Ordering::SeqCst);
+        // Always bump: the caller's watermark is ahead of storage whenever
+        // this runs, even if the in-memory cursor already matched.
+        self.rollback_epoch.fetch_add(1, Ordering::SeqCst);
+        if previous != next_height {
+            warn!(
+                "resync: cursor moved {} -> {} (on-disk tip {})",
+                previous, next_height, indexed_height
+            );
+        }
+        Ok(next_height)
+    }
+
     /// Get a reference to the node adapter
     pub fn node(&self) -> &Arc<N> {
         &self.node
@@ -208,6 +271,7 @@ where
         min_target_height: Option<u32>,
     ) -> SyncResult<Option<(u32, Vec<u8>, Vec<u8>)>> {
         let mut current_height = self.current_height.load(Ordering::SeqCst);
+        let mut rolled_back = false;
 
         // Get remote tip
         let remote_tip = self.node.get_tip_height().await?;
@@ -224,7 +288,19 @@ where
             .await
             {
                 Ok(new_height) => {
-                    if new_height != current_height {
+                    if new_height < current_height {
+                        // Storage WAS rolled back (handle_reorg only lowers
+                        // the height after `rollback_to_height`). The floor
+                        // below must not apply: it would skip the rollback
+                        // height, and every later block would then be
+                        // rejected out-of-order against the rolled-back tip.
+                        warn!(
+                            "Reorg handled: storage rolled back, resuming from height {} (cursor was {})",
+                            new_height, current_height
+                        );
+                        rolled_back = true;
+                        self.rollback_epoch.fetch_add(1, Ordering::SeqCst);
+                    } else if new_height != current_height {
                         info!("Reorg handled. Resuming from height {}", new_height);
                     }
                     current_height = new_height;
@@ -241,8 +317,14 @@ where
         // reorg's rollback still takes effect, but a phantom rollback
         // (no-op reorg detection that happened to clamp current_height)
         // can't cause a wedge.
+        //
+        // Commit-stall fix (2026-10-14): ...except after a REAL rollback,
+        // when the floor is exactly wrong. It points past the height that
+        // was just removed from storage, so the block that would re-extend
+        // the tip is never fetched again. The caller learns about the
+        // rollback through `rollback_epoch` and resets its watermark.
         let fetch_height = match min_target_height {
-            Some(m) if m > current_height => m,
+            Some(m) if !rolled_back && m > current_height => m,
             _ => current_height,
         };
 
@@ -474,6 +556,23 @@ where
                         }
                         Err(commit_err) => {
                             let msg = format!("{}", commit_err);
+
+                            // An out-of-order rejection is DETERMINISTIC: it is a
+                            // function of the gap between `height` and the
+                            // committed tip, and re-executing the block changes
+                            // neither. Retrying burned the whole 30-attempt
+                            // budget (~11 min) per block in production and
+                            // delayed the resync that is the only real fix.
+                            // Backport of upstream rc.15.
+                            if msg.contains("out-of-order commit rejected") {
+                                error!(
+                                    "snapshot-path atomic commit: block {}: {} — not retryable; \
+                                     surfacing immediately for cursor resync",
+                                    height, msg
+                                );
+                                return Err(SyncError::Storage(format!("commit_atomic: {}", msg)));
+                            }
+
                             crate::sync::log_atomic_retry_failure(
                                 "snapshot-path atomic commit",
                                 height,
@@ -704,6 +803,23 @@ where
                         }
                         Err(commit_err) => {
                             let msg = format!("{}", commit_err);
+
+                            // An out-of-order rejection is DETERMINISTIC: it is a
+                            // function of the gap between `height` and the
+                            // committed tip, and re-executing the block changes
+                            // neither. Retrying burned the whole 30-attempt
+                            // budget (~11 min) per block in production and
+                            // delayed the resync that is the only real fix.
+                            // Backport of upstream rc.15.
+                            if msg.contains("out-of-order commit rejected") {
+                                error!(
+                                    "snapshot-loop atomic commit: block {}: {} — not retryable; \
+                                     surfacing immediately for cursor resync",
+                                    height, msg
+                                );
+                                return Err(SyncError::Storage(format!("commit_atomic: {}", msg)));
+                            }
+
                             crate::sync::log_atomic_retry_failure(
                                 "snapshot-loop atomic commit",
                                 height,
