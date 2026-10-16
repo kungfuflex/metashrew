@@ -1,6 +1,6 @@
 [package]
 name = "metashrew-validator-core"
-version = "9.1.0-rc.3"
+version = "9.1.0-rc.4"
 edition = "2021"
 description = "Chain-validation policies for metashrew: built-in native validators plus the ABI for custom wasm ones"
 
@@ -14,7 +14,7 @@ bitcoin = { version = "0.32.6", default-features = false, features = ["std"] }
 
 # Host-side runner for `--spv-type custom:<path>.wasm`. Off by default so
 # a guest validator can depend on this crate without pulling wasmtime.
-wasmtime = { version = "49.0.2", optional = true }
+wasmtime = { version = "49.0.3", optional = true }
 anyhow = { version = "1.0", optional = true }
 
 [features]
