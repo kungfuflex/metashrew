@@ -47,6 +47,7 @@
 
 pub mod adapters;
 pub mod cpu_isolation;
+mod near_tip;
 pub mod smt_helper;
 pub mod snapshot;
 pub mod snapshot_adapters;
@@ -1237,61 +1238,38 @@ where
                     // `get_next_block_data` itself returning a lower
                     // height (which it can do if `handle_reorg` lowers
                     // `current_height` between iterations).
-                    let min_send_height = near_tip_min_send_height(last_sent_snapshot);
-                    // v9.0.5-rc.13: pass min_send_height as the fetch
-                    // floor so get_next_block_data ALWAYS returns a
-                    // block at height >= last_sent + 1. Without this
-                    // floor, get_next_block_data uses self.current_height
-                    // (the engine's in-memory atomic) which handle_reorg
-                    // can silently lower in a non-reorg edge case (e.g.
-                    // a transient hash mismatch between local storage
-                    // and bouncer/bitcoind during reorg detection). The
-                    // fetcher then drops every poll via near_tip_should_drop
-                    // and the processor wedges idle forever. Production
-                    // saw this 2026-05-26: j stuck at 951049 for 8+ min
-                    // post-commit, requiring manual pod restart to clear.
-                    match engine
-                        .get_next_block_data_with_floor(Some(min_send_height))
-                        .await
+                    // (floor computed inside near_tip_fetch_step)
+                    match near_tip::near_tip_fetch_step(
+                        &engine,
+                        &last_sent_height,
+                        last_sent_snapshot,
+                    )
+                    .await
                     {
-                        Ok(Some((height, block_data, block_hash))) => {
+                        near_tip::NearTipFetch::Send(block) => {
                             drop(engine);
-                            if near_tip_should_drop(last_sent_snapshot, height) {
-                                // Duplicate: the processor's atomic
-                                // has not yet caught up to what the
-                                // fetcher has already enqueued. Sleep
-                                // briefly, let the processor advance,
-                                // and retry on the next loop.
-                                debug!(
-                                    "FETCHER: dropping near-tip duplicate height={} (last_sent={} min_send={})",
-                                    height, last_sent_snapshot, min_send_height,
-                                );
-                                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                                continue;
-                            }
-                            if block_sender_clone
-                                .send(BlockData {
-                                    height,
-                                    block_data,
-                                    block_hash: block_hash.clone(),
-                                })
-                                .await
-                                .is_err()
-                            {
+                            let height = block.height;
+                            if block_sender_clone.send(block).await.is_err() {
                                 break;
                             }
                             // Bump fetcher watermark only AFTER a
-                            // successful send.  fetch_max so a
-                            // concurrent rollback-reset can't be
-                            // clobbered by a stale send that happened
-                            // to win the race.
-                            last_sent_height.fetch_max(height as i64, Ordering::SeqCst);
+                            // successful send.
+                            near_tip::record_sent(&last_sent_height, height);
                         }
-                        Ok(None) => {
+                        near_tip::NearTipFetch::Duplicate => {
+                            // Duplicate: the processor's atomic
+                            // has not yet caught up to what the
+                            // fetcher has already enqueued. Sleep
+                            // briefly, let the processor advance,
+                            // and retry on the next loop.
+                            drop(engine);
+                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        }
+                        near_tip::NearTipFetch::Idle => {
                             drop(engine);
                             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                         }
-                        Err(e) => {
+                        near_tip::NearTipFetch::Failed(e) => {
                             error!("Failed to fetch block: {}", e);
                             drop(engine);
                             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -1515,49 +1493,18 @@ where
                     BlockResult::Error(height, error) => {
                         let error_str = error.to_string();
 
-                        // Chain validation errors and out-of-order commits both
-                        // mean the cursor no longer matches storage — resync.
-                        if is_resync_error(&error_str) {
-                            warn!(
-                                "Chain discontinuity at height {}. Triggering reorg.",
-                                height
-                            );
-
-                            // v9.0.5-rc.16: re-anchor the engine cursor to the
-                            // on-disk tip before reorg detection. Previously this
-                            // called `handle_reorg(height, ..)` and discarded the
-                            // result, so the engine's `current_height` was never
-                            // lowered — and for an out-of-order rejection
-                            // `handle_reorg` returns `height` itself, leaving the
-                            // fetcher ahead of disk until a restart.
+                        {
                             let engine = sync_engine_clone.read().await;
-                            match engine.resync_cursor_to_storage_tip().await {
-                                Ok(rollback_height) => {
-                                    info!(
-                                        "Rolled back to height {}. Resuming sync.",
-                                        rollback_height
-                                    );
-                                    // v9.0.5-rc.6: rollback dropped the
-                                    // processor's tip DOWN. The fetcher's
-                                    // own last-sent watermark could be
-                                    // ahead of the rollback point; reset
-                                    // it to UNSET so the next fetch loop
-                                    // picks up processor_tip as the new
-                                    // starting height. We use store, not
-                                    // fetch_min, to ensure full reset —
-                                    // we never want to keep a stale
-                                    // last_sent past a rollback.
-                                    last_sent_height_idx.store(LAST_SENT_UNSET, Ordering::SeqCst);
-                                    warn!(
-                                    "FETCHER: last_sent_height reset to UNSET after rollback to {} — fetcher will resume from processor_tip",
-                                    rollback_height
-                                );
-                                }
-                                Err(e) => {
-                                    error!("Failed to handle reorg: {}", e);
-                                }
+                            if let Err(e) = near_tip::recover_from_failed_block(
+                                &engine,
+                                &last_sent_height_idx,
+                                height,
+                                &error_str,
+                            )
+                            .await
+                            {
+                                error!("Failed to handle reorg: {}", e);
                             }
-                            drop(engine);
                         }
 
                         error!("Failed to process block {}: {}", height, error_str);

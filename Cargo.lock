@@ -3868,6 +3868,7 @@ dependencies = [
  "actix-web",
  "anyhow",
  "async-trait",
+ "bitcoin 0.32.8",
  "bytes",
  "clap",
  "console-subscriber",
