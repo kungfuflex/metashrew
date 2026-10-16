@@ -16,6 +16,14 @@ The framework handles:
 - JSON-RPC interface for queries
 - View function execution for historical state
 
+## Security audits
+
+| Report | Scope | Assessor | Findings | Status |
+|---|---|---|---|---|
+| [SFSEC-2026-001](https://cdn.subfrost.io/audits/SFSEC-2026-001-alkanes-metashrew-20261015.pdf) (published 2026-10-15) | alkanes-rs v2.2.1-rc.4, metashrew v9.0.5-rc.13 to rc.15 | Halborn | 25 (2 High, 19 Medium, 4 Low) | All resolved: metashrew v9.0.5-rc.16 / v9.1.0-rc.1 |
+
+The report is bilingual (English and 简体中文). For each finding it reproduces Halborn's original text, then the fix: commits, code, activation and tests. A SHA-256 checksum is published next to the PDF (`.pdf.sha256`). To report a vulnerability, use [private vulnerability reporting](https://github.com/kungfuflex/metashrew/security/advisories/new).
+
 ## Prerequisites
 
 - Rust toolchain (latest stable)
