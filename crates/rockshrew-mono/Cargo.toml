@@ -100,6 +100,8 @@ ssh_e2e_tests = []
 
 [dev-dependencies]
 tokio-test = "0.4"
+# Real block headers for the reorg tests (already in the tree via metashrew-sync).
+bitcoin = "0.32.4"
 tempfile = "3.8"
 memshrew-runtime = { workspace = true }
 metashrew-core = { path = "../metashrew-core" }
