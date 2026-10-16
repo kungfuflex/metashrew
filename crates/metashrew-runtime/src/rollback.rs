@@ -69,7 +69,7 @@ fn parse_height_from_smt_value(value: &[u8]) -> Option<u32> {
 /// This is the correct implementation that BOTH RocksDB and MemStore should use.
 ///
 /// The rollback process:
-/// 1. Delete metadata keys (block_hash_*, state_root_*, smt:root:*) for heights > rollback_height
+/// 1. Delete metadata keys (block_hash_*, state_root_*, smt:root:*, /__INTERNAL/height-to-hash/*) for heights > rollback_height
 /// 2. Roll back append-only SMT data structures (keys with /length suffix)
 /// 3. This ensures all WASM-indexed data is properly cleaned up during reorgs
 ///
@@ -111,6 +111,11 @@ pub fn rollback_smt_data<S: SmtRollback>(
         } else if let Some(stripped) = key_str.strip_prefix("state_root_") {
             stripped.parse::<u32>().ok()
         } else if let Some(stripped) = key_str.strip_prefix("smt:root:") {
+            stripped.parse::<u32>().ok()
+        } else if let Some(stripped) = key_str.strip_prefix("/__INTERNAL/height-to-hash/") {
+            // Block-hash records written by `commit_atomic`. The manifest
+            // path deletes them; without this the full-scan path left the
+            // dead branch's hashes above the rollback height.
             stripped.parse::<u32>().ok()
         } else {
             None

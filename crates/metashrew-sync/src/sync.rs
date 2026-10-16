@@ -404,6 +404,7 @@ where
         min_target_height: Option<u32>,
     ) -> SyncResult<Option<(u32, Vec<u8>, Vec<u8>)>> {
         let mut current_height = self.current_height.load(Ordering::SeqCst);
+        let mut rolled_back = false;
 
         // Get remote tip
         let remote_tip = self.node.get_tip_height().await?;
@@ -420,6 +421,9 @@ where
             .await
             {
                 Ok(new_height) => {
+                    // handle_reorg only returns a lower height after it
+                    // rolled storage back.
+                    rolled_back = new_height < current_height;
                     if new_height != current_height {
                         info!("Reorg handled. Resuming from height {}", new_height);
                     }
@@ -435,9 +439,11 @@ where
 
         // v9.0.5-rc.13: clamp the fetch target to >= min_target_height so
         // the outer fetcher loop's `last_sent + 1` watermark always wins
-        // over a phantom-rolled-back current_height.
+        // over a phantom-rolled-back current_height. Not after a REAL
+        // rollback (v9.1.0-rc.3): the floor would skip the height that was
+        // just removed from storage (see SnapshotMetashrewSync).
         let fetch_height = match min_target_height {
-            Some(m) if m > current_height => m,
+            Some(m) if !rolled_back && m > current_height => m,
             _ => current_height,
         };
 

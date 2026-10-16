@@ -10,10 +10,8 @@
 //! points; `run()` only adds the channel, the sleeps and the logging around
 //! them.
 
-use crate::{
-    is_resync_error, near_tip_min_send_height, near_tip_should_drop, BlockData, LAST_SENT_UNSET,
-};
-use log::{debug, info, warn};
+use crate::{near_tip_min_send_height, near_tip_should_drop, BlockData, LAST_SENT_UNSET};
+use log::{debug, warn};
 use metashrew_sync::{
     BitcoinNodeAdapter, RuntimeAdapter, SnapshotMetashrewSync, StorageAdapter, SyncError,
 };
@@ -35,9 +33,15 @@ pub(crate) enum NearTipFetch {
 
 /// One near-tip fetcher iteration. `last_sent_snapshot` is the watermark the
 /// caller read at the top of its loop (it chose the near-tip path with it).
+///
+/// v9.1.0-rc.3: if the engine rolled storage back during this call (its
+/// reorg check found the tip orphaned) or a resync re-anchored the cursor
+/// meanwhile, `last_sent_height` points past what storage holds. It is
+/// reset here, before the block at the rolled-back height is handed out,
+/// and that block is never treated as a duplicate.
 pub(crate) async fn near_tip_fetch_step<N, S, R>(
     engine: &SnapshotMetashrewSync<N, S, R>,
-    _last_sent_height: &AtomicI64,
+    last_sent_height: &AtomicI64,
     last_sent_snapshot: i64,
 ) -> NearTipFetch
 where
@@ -45,16 +49,27 @@ where
     S: StorageAdapter + 'static,
     R: RuntimeAdapter + 'static,
 {
-    // v9.0.5-rc.13: pass min_send_height as the fetch floor so
-    // get_next_block_data ALWAYS returns a block at height >= last_sent + 1
-    // (see `run()` for the history of this floor).
+    // v9.0.5-rc.13: the floor (`last_sent + 1`) keeps get_next_block_data
+    // from re-fetching what is already enqueued while the processor lags
+    // (j stuck at 951049, 2026-05-26). The engine ignores it after a real
+    // rollback, which it reports through `rollback_epoch`.
     let min_send_height = near_tip_min_send_height(last_sent_snapshot);
-    match engine
+    let epoch_before = engine.rollback_epoch();
+    let result = engine
         .get_next_block_data_with_floor(Some(min_send_height))
-        .await
-    {
+        .await;
+    let rolled_back = engine.rollback_epoch() != epoch_before;
+    if rolled_back {
+        warn!(
+            "FETCHER: storage rolled back (reorg) — last_sent {} is past the on-disk tip; watermark reset, resuming at height {}",
+            last_sent_snapshot,
+            engine.current_height(),
+        );
+        last_sent_height.store(LAST_SENT_UNSET, Ordering::SeqCst);
+    }
+    match result {
         Ok(Some((height, block_data, block_hash))) => {
-            if near_tip_should_drop(last_sent_snapshot, height) {
+            if !rolled_back && near_tip_should_drop(last_sent_snapshot, height) {
                 debug!(
                     "FETCHER: dropping near-tip duplicate height={} (last_sent={} min_send={})",
                     height, last_sent_snapshot, min_send_height,
@@ -80,7 +95,16 @@ pub(crate) fn record_sent(last_sent_height: &AtomicI64, height: u32) {
 }
 
 /// The indexer task's answer to a block the processor could not commit.
-/// Returns the height the engine cursor was re-anchored at, if it was.
+/// Returns the height the engine cursor was re-anchored at.
+///
+/// v9.1.0-rc.3: EVERY failure resyncs, not only the chain-discontinuity /
+/// out-of-order ones (`crate::is_resync_error` is kept for logging). The
+/// block did not commit, and the fetcher runs ahead of the processor, so
+/// whatever it queued after it has no parent on disk. Re-anchoring at the
+/// on-disk tip + 1 (the startup heal's rule, `resync_cursor_to_storage_tip`)
+/// and clearing the watermark (store, not fetch_min: a stale last_sent must
+/// never survive a rollback) makes the next block attempted `indexed + 1`.
+/// Same rule as the alspo line's commit-stall fix (metashrew PR #63).
 pub(crate) async fn recover_from_failed_block<N, S, R>(
     engine: &SnapshotMetashrewSync<N, S, R>,
     last_sent_height: &AtomicI64,
@@ -92,23 +116,17 @@ where
     S: StorageAdapter + 'static,
     R: RuntimeAdapter + 'static,
 {
-    // Chain validation errors and out-of-order commits both mean the
-    // cursor no longer matches storage — resync.
-    if !is_resync_error(error_str) {
-        return Ok(None);
+    if crate::is_resync_error(error_str) {
+        warn!(
+            "Chain discontinuity at height {}. Triggering reorg.",
+            height
+        );
     }
-    warn!("Chain discontinuity at height {}. Triggering reorg.", height);
-
-    // v9.0.5-rc.16: re-anchor the engine cursor to the on-disk tip before
-    // reorg detection, then reset the fetcher's watermark so it resumes
-    // from the processor's tip (store, not fetch_min: a stale last_sent
-    // must never survive a rollback).
-    let rollback_height = engine.resync_cursor_to_storage_tip().await?;
-    info!("Rolled back to height {}. Resuming sync.", rollback_height);
+    let next_height = engine.resync_cursor_to_storage_tip().await?;
     last_sent_height.store(LAST_SENT_UNSET, Ordering::SeqCst);
     warn!(
-        "FETCHER: last_sent_height reset to UNSET after rollback to {} — fetcher will resume from processor_tip",
-        rollback_height
+        "resync after failed block {}: cursor re-anchored at {} (on-disk tip + 1); fetcher watermark reset",
+        height, next_height
     );
-    Ok(Some(rollback_height))
+    Ok(Some(next_height))
 }

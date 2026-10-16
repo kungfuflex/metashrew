@@ -233,6 +233,43 @@ pub(crate) fn is_resync_error(error_str: &str) -> bool {
         || error_str.contains("out-of-order commit rejected")
 }
 
+/// v9.1.0-rc.3: counts consecutive failed blocks so an indexer that cannot
+/// make progress exits instead of serving stale answers behind a green
+/// readiness probe. Every failure is answered with a cursor resync first
+/// (`near_tip::recover_from_failed_block`), so a healthy pod recovers within
+/// a few blocks; the stale blocks already queued behind a failed one fail
+/// fast and count too, bounded by the prefetch channel. `limit == 0`
+/// disables the exit. Same guard as the alspo line (metashrew PR #63).
+#[derive(Debug, Clone)]
+pub(crate) struct StallGuard {
+    limit: u32,
+    consecutive: u32,
+}
+
+impl StallGuard {
+    pub(crate) fn new(limit: u32) -> Self {
+        Self {
+            limit,
+            consecutive: 0,
+        }
+    }
+    pub(crate) fn record_success(&mut self) {
+        self.consecutive = 0;
+    }
+    /// Returns true when the process should give up and exit.
+    pub(crate) fn record_failure(&mut self) -> bool {
+        self.consecutive = self.consecutive.saturating_add(1);
+        self.limit > 0 && self.consecutive >= self.limit
+    }
+    pub(crate) fn consecutive(&self) -> u32 {
+        self.consecutive
+    }
+}
+
+/// Exit code when `StallGuard` gives up, distinguishable in `kubectl
+/// describe` from a panic (101) or a signal.
+pub const EXIT_CODE_STALLED: i32 = 75;
+
 /// Command-line arguments for `rockshrew-mono`.
 #[derive(Parser, Debug, Clone)]
 #[command(version, about, long_about = None)]
@@ -429,6 +466,18 @@ pub struct Args {
     /// workers (via cpu_isolation) and run at --view-nice priority.
     #[arg(long, env = "ROCKSHREW_VIEW_RUNTIME_WORKERS")]
     pub view_runtime_workers: Option<usize>,
+    /// Exit with code 75 after this many CONSECUTIVE failed blocks, each of
+    /// which has already been answered with a cursor resync. An indexer
+    /// still failing after that will not heal by itself; a restart (startup
+    /// heal) is the recovery. 0 = never exit. The default comfortably
+    /// exceeds the stale blocks that can be queued behind one failure
+    /// (prefetch channel + in flight).
+    #[arg(
+        long,
+        env = "ROCKSHREW_MAX_CONSECUTIVE_BLOCK_FAILURES",
+        default_value_t = 12
+    )]
+    pub max_consecutive_block_failures: u32,
 }
 
 /// Shared application state for the JSON-RPC server.
@@ -1471,8 +1520,10 @@ where
     let indexer_handle = tokio::spawn({
         let sync_engine_clone = sync_engine_arc.clone();
         let last_sent_height_idx = last_sent_height.clone();
+        let max_consecutive_block_failures = args.max_consecutive_block_failures;
         async move {
             info!("Starting block indexing process...");
+            let mut stall_guard = StallGuard::new(max_consecutive_block_failures);
             let mut block_count = 0u64;
             let start_time = Instant::now();
 
@@ -1480,6 +1531,7 @@ where
                 match result {
                     BlockResult::Success(height) => {
                         block_count += 1;
+                        stall_guard.record_success();
 
                         if block_count % 100 == 0 {
                             let elapsed = start_time.elapsed();
@@ -1508,6 +1560,17 @@ where
                         }
 
                         error!("Failed to process block {}: {}", height, error_str);
+                        if stall_guard.record_failure() {
+                            error!(
+                                "{} consecutive blocks failed without a successful commit (last: {}: {}); \
+                                 exiting with code {} so the pod restarts and the startup heal runs",
+                                stall_guard.consecutive(),
+                                height,
+                                error_str,
+                                EXIT_CODE_STALLED
+                            );
+                            std::process::exit(EXIT_CODE_STALLED);
+                        }
                         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                     }
                 }

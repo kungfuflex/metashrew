@@ -22,15 +22,13 @@
 //! the continuity check runs for real. Fetcher and processor are run one
 //! step at a time, which is one valid interleaving of the production tasks.
 
-use crate::near_tip::{
-    near_tip_fetch_step, record_sent, recover_from_failed_block, NearTipFetch,
-};
+use crate::near_tip::{near_tip_fetch_step, record_sent, recover_from_failed_block, NearTipFetch};
+use async_trait::async_trait;
 use bitcoin::block::{Header, Version};
 use bitcoin::hashes::Hash;
 use bitcoin::{Block, BlockHash, CompactTarget, TxMerkleNode};
 use metashrew_sync::snapshot::SyncMode;
 use metashrew_sync::snapshot_sync::SnapshotMetashrewSync;
-use async_trait::async_trait;
 use metashrew_sync::{
     AtomicBlockResult, MockBitcoinNode, MockRuntime, PreviewCall, RuntimeAdapter, RuntimeStats,
     StorageAdapter, SyncConfig, SyncResult, ViewCall, ViewResult,
@@ -216,7 +214,7 @@ impl Harness {
                 .await
                 .unwrap();
         }
-        let mut hx = Self {
+        let hx = Self {
             engine,
             storage,
             db,
@@ -245,7 +243,8 @@ impl Harness {
     fn extend(&mut self, salt: u32) {
         let tip = self.canonical.last().unwrap();
         let next = chain(hash_of(tip), tip.0 + 1, tip.0 + 1, salt);
-        self.node.add_block(next[0].0, next[0].1.clone(), next[0].2.clone());
+        self.node
+            .add_block(next[0].0, next[0].1.clone(), next[0].2.clone());
         self.canonical.extend(next);
     }
 
@@ -425,7 +424,7 @@ async fn reorgs_heal_without_restart_full_scan_rollback() {
 async fn repeated_reorgs_heal_without_restart() {
     let mut hx = Harness::new(10).await;
     let mut salt = 10;
-    for round in 0..6 {
+    for _ in 0..6 {
         let tip = hx.canonical.last().unwrap().0;
         salt += 1;
         hx.reorg(tip, tip, salt);
@@ -435,7 +434,6 @@ async fn repeated_reorgs_heal_without_restart() {
         hx.extend(salt);
         hx.pump().await;
         hx.assert_synced(tip + 1).await;
-        let _ = round;
     }
 
     // Flip-flop at one height: A -> B -> A' (a third block) at the tip.
@@ -457,3 +455,21 @@ async fn repeated_reorgs_heal_without_restart() {
     hx.assert_synced(tip + 1).await;
 }
 
+#[test]
+fn stall_guard_exits_only_after_consecutive_failures() {
+    use crate::StallGuard;
+    let mut g = StallGuard::new(3);
+    assert!(!g.record_failure());
+    assert!(!g.record_failure());
+    g.record_success();
+    assert!(!g.record_failure());
+    assert!(!g.record_failure());
+    assert!(
+        g.record_failure(),
+        "third consecutive failure trips the guard"
+    );
+    let mut off = StallGuard::new(0);
+    for _ in 0..1000 {
+        assert!(!off.record_failure(), "0 disables the exit");
+    }
+}
