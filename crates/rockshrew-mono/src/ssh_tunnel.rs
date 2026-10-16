@@ -1,15 +1,35 @@
+//! Daemon RPC transport: plain HTTP(S) requests to bitcoind, plus optional
+//! SSH tunnelling.
+//!
+//! The SSH half (`ssh2+http(s)://` daemon URLs and `sshfs://` auth cookies)
+//! is compiled only with the non-default `ssh-tunnel` cargo feature. Without
+//! it, russh is not linked into the binary, `parse_daemon_rpc_url` rejects
+//! `ssh2+` URLs at startup, and an `sshfs://` auth value fails the request
+//! with an explicit error. Production uses plain `http://`.
+
 use anyhow::{anyhow, Result};
-use log::{debug, error, info};
+#[cfg(feature = "ssh-tunnel")]
+use log::info;
+use log::{debug, error};
 use once_cell::sync::Lazy;
+#[cfg(feature = "ssh-tunnel")]
 use russh::{client, ChannelMsg};
+#[cfg(feature = "ssh-tunnel")]
 use russh_keys::{self, ssh_key};
+#[cfg(feature = "ssh-tunnel")]
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+#[cfg(feature = "ssh-tunnel")]
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "ssh-tunnel")]
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+#[cfg(feature = "ssh-tunnel")]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
+#[cfg(feature = "ssh-tunnel")]
+use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use url::Url as UrlParser;
 
@@ -73,6 +93,7 @@ pub struct SshTunnelConfig {
 }
 
 /// Represents an active SSH tunnel
+#[cfg(feature = "ssh-tunnel")]
 #[derive(Clone)]
 pub struct SshTunnel {
     pub local_port: u16,
@@ -81,7 +102,38 @@ pub struct SshTunnel {
     _listener_task: Arc<()>, // Keep the listener task alive
 }
 
+/// Without the `ssh-tunnel` feature no tunnel can exist: the `Infallible`
+/// field makes this type impossible to construct, so every `Option<SshTunnel>`
+/// is `None` and the plain-HTTP path is the only one compiled.
+#[cfg(not(feature = "ssh-tunnel"))]
+#[derive(Clone, Debug)]
+pub struct SshTunnel {
+    pub local_port: u16,
+    _unconstructible: std::convert::Infallible,
+}
+
+#[cfg(not(feature = "ssh-tunnel"))]
+impl SshTunnel {
+    pub async fn create(_config: SshTunnelConfig) -> Result<Self> {
+        Err(ssh_disabled())
+    }
+
+    #[allow(dead_code)]
+    pub async fn close(&self) -> Result<()> {
+        match self._unconstructible {}
+    }
+}
+
+#[cfg(not(feature = "ssh-tunnel"))]
+fn ssh_disabled() -> anyhow::Error {
+    anyhow!(
+        "SSH tunnelling (ssh2+http(s):// daemon URLs, sshfs:// auth) is not compiled in; \
+         rebuild rockshrew-mono with `--features ssh-tunnel`"
+    )
+}
+
 // Manual Debug implementation since client::Handle<Client> doesn't implement Debug
+#[cfg(feature = "ssh-tunnel")]
 impl std::fmt::Debug for SshTunnel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SshTunnel")
@@ -92,6 +144,7 @@ impl std::fmt::Debug for SshTunnel {
     }
 }
 
+#[cfg(feature = "ssh-tunnel")]
 impl SshTunnel {
     /// Creates an SSH tunnel and returns the local port
     pub async fn create(mut config: SshTunnelConfig) -> Result<Self> {
@@ -272,6 +325,7 @@ impl SshTunnel {
 }
 
 /// Handle a single connection through the SSH tunnel
+#[cfg(feature = "ssh-tunnel")]
 async fn handle_connection(
     mut stream: TcpStream,
     originator_addr: SocketAddr,
@@ -338,8 +392,10 @@ async fn handle_connection(
 }
 
 /// SSH client handler
+#[cfg(feature = "ssh-tunnel")]
 struct Client {}
 
+#[cfg(feature = "ssh-tunnel")]
 impl client::Handler for Client {
     type Error = russh::Error;
 
@@ -354,6 +410,7 @@ impl client::Handler for Client {
 }
 
 /// Load a secret key from a file
+#[cfg(feature = "ssh-tunnel")]
 fn load_secret_key<P: AsRef<Path>>(
     path: P,
     passphrase: Option<&str>,
@@ -371,7 +428,6 @@ fn load_secret_key<P: AsRef<Path>>(
         Err(e) => Err(anyhow!("Failed to decode SSH key: {}", e)),
     }
 }
-
 
 /// Find an available local port for the SSH tunnel
 pub async fn find_available_port() -> Result<u16> {
@@ -522,6 +578,11 @@ pub async fn read_ssh_config(hostname: &str) -> Result<(String, u16, String, Opt
 pub async fn parse_daemon_rpc_url(
     url_str: &str,
 ) -> Result<(String, bool, Option<SshTunnelConfig>)> {
+    #[cfg(not(feature = "ssh-tunnel"))]
+    if url_str.starts_with("ssh2+") {
+        return Err(ssh_disabled());
+    }
+
     // Check if the URL starts with ssh2+ prefix
     if url_str.starts_with("ssh2+http://") || url_str.starts_with("ssh2+https://") {
         let protocol = if url_str.starts_with("ssh2+https://") {
@@ -868,7 +929,14 @@ pub async fn make_request_with_tunnel(
     }
 }
 
+/// Reads a file over SSH (needs the `ssh-tunnel` feature).
+#[cfg(not(feature = "ssh-tunnel"))]
+pub async fn read_file_over_ssh(_url_str: &str) -> Result<String> {
+    Err(ssh_disabled())
+}
+
 /// Reads a file over SSH using russh
+#[cfg(feature = "ssh-tunnel")]
 pub async fn read_file_over_ssh(url_str: &str) -> Result<String> {
     // Parse the URL
     if !url_str.starts_with("sshfs://") {

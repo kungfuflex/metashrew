@@ -167,7 +167,7 @@ pub trait KeyValuePointer {
     /// let ptr = IndexPointer::wrap(&b"balances/user123".to_vec());
     /// ```
     fn wrap(word: &Vec<u8>) -> Self;
-    
+
     /// Extract the raw key bytes from this pointer
     ///
     /// Returns the underlying key bytes that identify this pointer's
@@ -184,7 +184,7 @@ pub trait KeyValuePointer {
     /// println!("Key: {}", String::from_utf8_lossy(&key_bytes));
     /// ```
     fn unwrap(&self) -> Arc<Vec<u8>>;
-    
+
     /// Set the value at this pointer's key
     ///
     /// Stores raw byte data at the key location represented by this pointer.
@@ -200,7 +200,7 @@ pub trait KeyValuePointer {
     /// ptr.set(Arc::new(b"some_data".to_vec()));
     /// ```
     fn set(&mut self, v: Arc<Vec<u8>>);
-    
+
     /// Get the value at this pointer's key
     ///
     /// Retrieves raw byte data from the key location represented by this pointer.
@@ -216,7 +216,7 @@ pub trait KeyValuePointer {
     /// let data = ptr.get();
     /// ```
     fn get(&self) -> Arc<Vec<u8>>;
-    
+
     /// Inherit configuration from another pointer
     ///
     /// This method allows pointers to inherit settings or context from

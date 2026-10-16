@@ -31,7 +31,9 @@
 //!   3. Linear advance: when the processor advances atomically, the
 //!      fetcher sends each height EXACTLY once.
 
-use crate::{compute_next_fetch_range, near_tip_min_send_height, near_tip_should_drop, LAST_SENT_UNSET};
+use crate::{
+    compute_next_fetch_range, near_tip_min_send_height, near_tip_should_drop, LAST_SENT_UNSET,
+};
 
 // ----------------------------------------------------------------------------
 // Test 1: slow processor → no duplicates
@@ -51,13 +53,9 @@ fn fetcher_does_not_duplicate_on_slow_processor() {
     let mut last_sent = LAST_SENT_UNSET;
 
     // First iteration: starts from processor_tip.
-    let (start1, end1) = compute_next_fetch_range(
-        processor_tip,
-        last_sent,
-        prefetch_size,
-        remote_tip,
-    )
-    .expect("first iteration must produce a range");
+    let (start1, end1) =
+        compute_next_fetch_range(processor_tip, last_sent, prefetch_size, remote_tip)
+            .expect("first iteration must produce a range");
     assert_eq!(start1, 949_719);
     assert_eq!(end1, 949_725, "fetch_end = fetch_start + prefetch_size");
 
@@ -72,17 +70,15 @@ fn fetcher_does_not_duplicate_on_slow_processor() {
     let mut all_heights = Vec::new();
     all_heights.extend(start1..end1);
     for _ in 0..30 {
-        if let Some((s, e)) = compute_next_fetch_range(
-            processor_tip,
-            last_sent,
-            prefetch_size,
-            remote_tip,
-        ) {
+        if let Some((s, e)) =
+            compute_next_fetch_range(processor_tip, last_sent, prefetch_size, remote_tip)
+        {
             for h in s..e {
                 assert!(
                     !all_heights.contains(&h),
                     "fetcher tried to re-enqueue height {} (already in {:?})",
-                    h, all_heights,
+                    h,
+                    all_heights,
                 );
                 all_heights.push(h);
             }
@@ -129,14 +125,13 @@ fn fetcher_resumes_after_rollback() {
 
     // Sanity: in this pre-rollback state, fetcher would skip past
     // last_sent.  It would NOT re-fetch 949_720.
-    let (s_before, _e_before) = compute_next_fetch_range(
-        processor_tip_before,
-        last_sent,
-        prefetch_size,
-        remote_tip,
-    )
-    .expect("pre-rollback iteration must produce a range");
-    assert_eq!(s_before, 949_725, "without rollback, fetcher continues from last_sent + 1");
+    let (s_before, _e_before) =
+        compute_next_fetch_range(processor_tip_before, last_sent, prefetch_size, remote_tip)
+            .expect("pre-rollback iteration must produce a range");
+    assert_eq!(
+        s_before, 949_725,
+        "without rollback, fetcher continues from last_sent + 1"
+    );
 
     // Now a reorg fires.  The processor tip drops to 949_715, and the
     // rollback handler resets last_sent to UNSET (this is the
@@ -144,15 +139,17 @@ fn fetcher_resumes_after_rollback() {
     last_sent = LAST_SENT_UNSET;
     let processor_tip_after = 949_715u32;
 
-    let (s_after, e_after) = compute_next_fetch_range(
-        processor_tip_after,
-        last_sent,
-        prefetch_size,
-        remote_tip,
-    )
-    .expect("post-rollback iteration must produce a range");
-    assert_eq!(s_after, 949_715, "post-rollback fetch must start at the new processor tip");
-    assert_eq!(e_after, 949_721, "post-rollback batch must size up to prefetch_size");
+    let (s_after, e_after) =
+        compute_next_fetch_range(processor_tip_after, last_sent, prefetch_size, remote_tip)
+            .expect("post-rollback iteration must produce a range");
+    assert_eq!(
+        s_after, 949_715,
+        "post-rollback fetch must start at the new processor tip"
+    );
+    assert_eq!(
+        e_after, 949_721,
+        "post-rollback batch must size up to prefetch_size"
+    );
 }
 
 // ----------------------------------------------------------------------------
@@ -179,12 +176,9 @@ fn fetcher_advances_with_processor() {
     let mut iters = 0;
     while all_heights.len() < 50 && iters < 200 {
         iters += 1;
-        if let Some((s, e)) = compute_next_fetch_range(
-            processor_tip,
-            last_sent,
-            prefetch_size,
-            remote_tip,
-        ) {
+        if let Some((s, e)) =
+            compute_next_fetch_range(processor_tip, last_sent, prefetch_size, remote_tip)
+        {
             for h in s..e {
                 all_heights.push(h);
             }
@@ -209,7 +203,10 @@ fn fetcher_advances_with_processor() {
 
     // Contiguity invariant: the heights we sent should be a
     // contiguous range starting at start_tip.
-    assert_eq!(all_heights[0], start_tip, "first sent must be the initial processor tip");
+    assert_eq!(
+        all_heights[0], start_tip,
+        "first sent must be the initial processor tip"
+    );
     for (i, h) in all_heights.iter().enumerate() {
         assert_eq!(
             *h,
@@ -230,13 +227,9 @@ fn fetcher_caps_at_remote_tip() {
     let processor_tip = 949_999u32;
     let remote_tip = 950_001u32;
 
-    let (s, e) = compute_next_fetch_range(
-        processor_tip,
-        LAST_SENT_UNSET,
-        prefetch_size,
-        remote_tip,
-    )
-    .expect("range must exist when processor < remote");
+    let (s, e) =
+        compute_next_fetch_range(processor_tip, LAST_SENT_UNSET, prefetch_size, remote_tip)
+            .expect("range must exist when processor < remote");
     assert_eq!(s, 949_999);
     assert_eq!(
         e, 950_002,
@@ -280,13 +273,8 @@ fn fetcher_jumps_to_processor_tip_if_ahead_of_last_sent() {
     let last_sent = 949_720i64;
     let remote_tip = 950_000u32;
 
-    let (s, e) = compute_next_fetch_range(
-        processor_tip,
-        last_sent,
-        prefetch_size,
-        remote_tip,
-    )
-    .expect("range must exist");
+    let (s, e) = compute_next_fetch_range(processor_tip, last_sent, prefetch_size, remote_tip)
+        .expect("range must exist");
     assert_eq!(
         s, 949_730,
         "must skip ahead to processor_tip, not stick at last_sent + 1",

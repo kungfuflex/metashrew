@@ -223,7 +223,9 @@ pub trait StorageAdapter: Send + Sync {
     /// Get the underlying database handle for snapshot operations
     /// This is specific to RocksDB implementations and may not be available for all storage adapters
     async fn get_db_handle(&self) -> SyncResult<std::sync::Arc<rocksdb::DB>> {
-        Err(crate::SyncError::Storage("Database handle not available for this storage adapter".to_string()))
+        Err(crate::SyncError::Storage(
+            "Database handle not available for this storage adapter".to_string(),
+        ))
     }
 
     /// v9.0.5-rc.6 startup-heal hook: read the runtime-owned tip-height
@@ -460,7 +462,6 @@ pub trait SyncEngine: Send + Sync {
 
     /// Process a single block (for testing)
     async fn process_single_block(&mut self, height: u32) -> SyncResult<()>;
-
 }
 
 /// Sync engine status

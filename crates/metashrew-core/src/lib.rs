@@ -87,8 +87,8 @@ pub mod compat;
 pub mod imports;
 pub mod index_pointer;
 pub mod macros;
-pub mod stdio;
 pub mod proto;
+pub mod stdio;
 
 #[cfg(feature = "panic-hook")]
 use crate::compat::panic_hook;
@@ -96,8 +96,8 @@ use crate::imports::{__flush, __get, __get_len, __host_len, __load_input};
 pub use crate::stdio::stdout;
 #[allow(unused_imports)]
 use metashrew_support::{
-	compat::{to_arraybuffer_layout, to_passback_ptr, to_ptr},
-	proto::metashrew::{IndexerMetadata, KeyValueFlush, ViewFunction},
+    compat::{to_arraybuffer_layout, to_passback_ptr, to_ptr},
+    proto::metashrew::{IndexerMetadata, KeyValueFlush, ViewFunction},
 };
 
 /// Global cache for storing key-value pairs read from the database

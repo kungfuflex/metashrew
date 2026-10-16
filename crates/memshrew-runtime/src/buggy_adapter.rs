@@ -4,9 +4,9 @@
 //! not the actual SMT data. We use this to prove the bug exists before fixing it.
 
 use crate::adapter::MemStoreAdapter;
+use async_trait::async_trait;
 use metashrew_runtime::to_labeled_key;
 use metashrew_sync::{StorageAdapter, SyncResult};
-use async_trait::async_trait;
 
 /// Wrapper around MemStoreAdapter that uses the BUGGY rollback
 #[derive(Clone)]
@@ -55,7 +55,10 @@ impl metashrew_runtime::KeyValueStoreLike for BuggyMemStoreAdapter {
         self.inner.delete(key)
     }
 
-    fn scan_prefix<K: AsRef<[u8]>>(&self, prefix: K) -> Result<Vec<(Vec<u8>, Vec<u8>)>, Self::Error> {
+    fn scan_prefix<K: AsRef<[u8]>>(
+        &self,
+        prefix: K,
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, Self::Error> {
         self.inner.scan_prefix(prefix)
     }
 

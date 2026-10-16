@@ -1,10 +1,17 @@
 [package]
 name = "memshrew-p2p"
-version = "9.1.0-rc.1"
+version = "9.1.0-rc.3"
 edition = "2021"
 
 [dependencies]
-actix-web = "4.9.0"
+actix-web = { version = "4.9.0", default-features = false, features = [
+    # Every actix-web default feature except `http2`: the server binds plain
+    # HTTP/1.1 (`HttpServer::bind`), so h2c/ALPN is never negotiated, and
+    # `http2` is what pulls h2 0.3 (RUSTSEC-2026-0258, no 0.3 fix) into the
+    # binary through actix-http.
+    "macros", "compress-brotli", "compress-gzip", "compress-zstd",
+    "cookies", "unicode", "compat", "ws",
+] }
 itertools = "0.14.0"
 clap = { version = "4.5.26", features = ["unstable-doc"] }
 reqwest = { version = "0.12.12", features = ["json"] }

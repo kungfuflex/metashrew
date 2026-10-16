@@ -2,7 +2,7 @@ use crate::adapter::RocksDBBatch;
 use crate::RocksDBRuntimeAdapter;
 use anyhow::Result;
 use metashrew_runtime::{BatchLike, KeyValueStoreLike};
-use rocksdb::{DB, WriteBatchIterator};
+use rocksdb::{WriteBatchIterator, DB};
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -87,7 +87,9 @@ impl KeyValueStoreLike for ForkAdapter {
     fn create_batch(&self) -> Self::Batch {
         match self {
             ForkAdapter::Modern(adapter) => adapter.create_batch(),
-            ForkAdapter::Legacy(_adapter) => crate::adapter::RocksDBBatch(rocksdb::WriteBatch::default()),
+            ForkAdapter::Legacy(_adapter) => {
+                crate::adapter::RocksDBBatch(rocksdb::WriteBatch::default())
+            }
         }
     }
 
@@ -141,7 +143,6 @@ impl LegacyRocksDBRuntimeAdapter {
     }
 }
 
-
 impl KeyValueStoreLike for LegacyRocksDBRuntimeAdapter {
     type Batch = crate::adapter::RocksDBBatch;
     type Error = rocksdb::Error;
@@ -181,8 +182,9 @@ impl KeyValueStoreLike for LegacyRocksDBRuntimeAdapter {
     }
 
     fn delete<K: AsRef<[u8]>>(&mut self, key: K) -> Result<(), Self::Error> {
-        self.db
-            .delete(LegacyRocksDBRuntimeAdapter::to_labeled_key(&key.as_ref().to_vec()))
+        self.db.delete(LegacyRocksDBRuntimeAdapter::to_labeled_key(
+            &key.as_ref().to_vec(),
+        ))
     }
 
     fn put<K: AsRef<[u8]>, V: AsRef<[u8]>>(&mut self, key: K, value: V) -> Result<(), Self::Error> {
@@ -197,8 +199,7 @@ impl KeyValueStoreLike for LegacyRocksDBRuntimeAdapter {
         prefix: K,
     ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, Self::Error> {
         let mut results = Vec::new();
-        let prefix_bytes =
-            LegacyRocksDBRuntimeAdapter::to_labeled_key(&prefix.as_ref().to_vec());
+        let prefix_bytes = LegacyRocksDBRuntimeAdapter::to_labeled_key(&prefix.as_ref().to_vec());
         let mut iter = self.db.raw_iterator();
         iter.seek(&prefix_bytes);
         while iter.valid() {

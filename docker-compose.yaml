@@ -18,21 +18,6 @@ services:
     volumes:
       - ${METASHREW_DATA}:/metashrew
       - ${BITCOIN_DATA}:/bitcoin
-  metashrew-view:
-    network_mode: 'host'
-    image: metashrew/metashrew-view
-    build:
-      context: ./
-      dockerfile: docker/Dockerfile.view
-    environment:
-      - PROGRAM_PATH=/metashrew/indexer.wasm
-      - DB_LOCATION=/metashrew/rocksdb
-      - PORT=${RPC_PORT:-8080}
-      - HOST=0.0.0.0
-      - RUST_LOG=${LOG_FILTERS:-DEBUG}
-    volumes:
-      - ${METASHREW_DATA}:/metashrew
-    restart: unless-stopped
 volumes:
   metashrew:
     driver: local

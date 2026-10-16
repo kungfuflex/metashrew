@@ -28,8 +28,8 @@
 
 use async_trait::async_trait;
 use metashrew_sync::{
-    heal_pointer_divergence_at_startup, BitcoinNodeAdapter, BlockInfo, ChainTip, StartupHealOutcome,
-    StorageAdapter, StorageStats, SyncConfig, SyncError, SyncResult,
+    heal_pointer_divergence_at_startup, BitcoinNodeAdapter, BlockInfo, ChainTip,
+    StartupHealOutcome, StorageAdapter, StorageStats, SyncConfig, SyncError, SyncResult,
 };
 use std::collections::HashMap;
 use std::sync::{
@@ -269,7 +269,8 @@ impl BitcoinNodeAdapter for OracleNode {
         if !self.connected {
             return Err(SyncError::BitcoinNode("not connected".into()));
         }
-        (self.oracle)(height).ok_or_else(|| SyncError::BitcoinNode(format!("no block at {}", height)))
+        (self.oracle)(height)
+            .ok_or_else(|| SyncError::BitcoinNode(format!("no block at {}", height)))
     }
     async fn get_block_data(&self, _height: u32) -> SyncResult<Vec<u8>> {
         Ok(vec![])
@@ -341,8 +342,14 @@ async fn startup_heal_three_pointers_agree_is_noop() {
     // Re-run heal twice more — still idempotent.
     let storage_arc2 = Arc::new(TokioRwLock::new(storage.clone()));
     let node2 = Arc::new(OracleNode::canonical(949_718));
-    let (_h2, _o2) = heal_pointer_divergence_at_startup(node2, storage_arc2, &config).await.unwrap();
-    assert_eq!(storage.writes(), writes_before, "second heal must also be a no-op");
+    let (_h2, _o2) = heal_pointer_divergence_at_startup(node2, storage_arc2, &config)
+        .await
+        .unwrap();
+    assert_eq!(
+        storage.writes(),
+        writes_before,
+        "second heal must also be a no-op"
+    );
 }
 
 // ============================================================================
@@ -503,7 +510,10 @@ async fn startup_heal_bitcoind_disagrees_walks_back() {
         // critical invariant is the actual height ended up at 949_715
         // — but we should not have advanced past the divergence.
         StartupHealOutcome::AlreadyConsistent { tip } => {
-            assert_eq!(tip, 949_715, "if AlreadyConsistent, tip must be at the walked-back height");
+            assert_eq!(
+                tip, 949_715,
+                "if AlreadyConsistent, tip must be at the walked-back height"
+            );
         }
         StartupHealOutcome::Disabled => panic!("heal was enabled"),
     }
@@ -540,7 +550,10 @@ async fn startup_heal_disabled_via_flag() {
         .await
         .expect("heal-disabled path must not error");
 
-    assert_eq!(h, 949_718, "heal-disabled must return raw __INTERNAL/height");
+    assert_eq!(
+        h, 949_718,
+        "heal-disabled must return raw __INTERNAL/height"
+    );
     assert_eq!(
         outcome,
         StartupHealOutcome::Disabled,
@@ -582,7 +595,10 @@ async fn startup_heal_bitcoind_unreachable_trusts_local_pointers() {
         .await
         .expect("heal must not error on bitcoind unreachable");
 
-    assert_eq!(h, 949_718, "must return the on-disk indexed-height when bitcoind unreachable");
+    assert_eq!(
+        h, 949_718,
+        "must return the on-disk indexed-height when bitcoind unreachable"
+    );
     assert_eq!(
         storage.writes(),
         writes_before,

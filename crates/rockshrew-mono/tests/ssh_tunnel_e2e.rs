@@ -4,9 +4,9 @@
 //! This test verifies that the `BitcoinRpcAdapter` can correctly parse `ssh://` URLs,
 //! establish an SSH tunnel, and communicate with a mock Bitcoin daemon through it.
 
+use metashrew_sync::BitcoinNodeAdapter;
 use rockshrew_mono::adapters::BitcoinRpcAdapter;
 use rockshrew_mono::ssh_tunnel;
-use metashrew_sync::BitcoinNodeAdapter;
 use std::process::Command;
 use tokio;
 
@@ -57,15 +57,24 @@ impl TestSshServer {
         }
         assert!(ssh_ready, "SSH server did not become ready in time");
 
-        Self { container_id, ssh_port }
+        Self {
+            container_id,
+            ssh_port,
+        }
     }
 }
 
 impl Drop for TestSshServer {
     fn drop(&mut self) {
         // Stop and remove the Docker container
-        let _ = Command::new("docker").arg("stop").arg(&self.container_id).status();
-        let _ = Command::new("docker").arg("rm").arg(&self.container_id).status();
+        let _ = Command::new("docker")
+            .arg("stop")
+            .arg(&self.container_id)
+            .status();
+        let _ = Command::new("docker")
+            .arg("rm")
+            .arg(&self.container_id)
+            .status();
     }
 }
 
@@ -84,11 +93,14 @@ async fn test_ssh_tunnel_e2e() {
         .spawn()
         .expect("Failed to start mock daemon");
 
-    let rpc_url = format!("ssh2+http://testuser:testpassword@127.0.0.1:{}/127.0.0.1:{}", server.ssh_port, mock_rpc_port);
+    let rpc_url = format!(
+        "ssh2+http://testuser:testpassword@127.0.0.1:{}/127.0.0.1:{}",
+        server.ssh_port, mock_rpc_port
+    );
     let (parsed_url, bypass_ssl, tunnel_config) = ssh_tunnel::parse_daemon_rpc_url(&rpc_url)
         .await
         .expect("Failed to parse daemon RPC URL");
-    
+
     let adapter = BitcoinRpcAdapter::new(parsed_url, None, bypass_ssl, tunnel_config);
 
     // Poll for the service to be ready
@@ -100,7 +112,10 @@ async fn test_ssh_tunnel_e2e() {
         }
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
     }
-    assert_eq!(tip_height, 100, "Failed to get correct tip height after polling");
+    assert_eq!(
+        tip_height, 100,
+        "Failed to get correct tip height after polling"
+    );
 
     // Clean up
     mock_daemon_handle.kill().unwrap();

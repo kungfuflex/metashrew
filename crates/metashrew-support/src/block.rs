@@ -172,16 +172,16 @@ impl AuxpowVersion {
 pub struct Auxpow {
     /// Coinbase transaction from the parent blockchain containing this block's hash.
     pub coinbase_txn: Transaction,
-    
+
     /// Hash of this block that was embedded in the parent coinbase transaction.
     pub block_hash: BlockHash,
-    
+
     /// Merkle branch proving coinbase transaction inclusion in parent block.
     pub coinbase_branch: AuxpowMerkleBranch,
-    
+
     /// Merkle branch proving this blockchain's inclusion in parent blockchain.
     pub blockchain_branch: AuxpowMerkleBranch,
-    
+
     /// Header of the parent blockchain block that includes the proof of work.
     pub parent_block: AuxpowHeader,
 }
@@ -233,22 +233,22 @@ impl Auxpow {
 pub struct AuxpowHeader {
     /// Extended version information with AuxPoW flags.
     pub version: AuxpowVersion,
-    
+
     /// Hash of the previous block in the blockchain.
     pub prev_blockhash: BlockHash,
-    
+
     /// Merkle root of all transactions in this block.
     pub merkle_root: TxMerkleNode,
-    
+
     /// Block timestamp as Unix epoch time.
     pub time: u32,
-    
+
     /// Difficulty target in compact format.
     pub bits: CompactTarget,
-    
+
     /// Nonce value used for proof of work.
     pub nonce: u32,
-    
+
     /// Optional auxiliary proof of work data (present when version.is_auxpow() is true).
     pub auxpow: Option<Box<Auxpow>>,
 }
@@ -289,7 +289,7 @@ impl Into<Header> for AuxpowHeader {
 pub struct AuxpowBlock {
     /// Extended block header with optional AuxPoW data.
     pub header: AuxpowHeader,
-    
+
     /// Vector of all transactions included in this block.
     pub txdata: Vec<Transaction>,
 }
@@ -310,10 +310,10 @@ pub struct AuxpowBlock {
 pub struct AuxpowMerkleBranch {
     /// Number of hash values in the merkle branch.
     pub branch_length: u64,
-    
+
     /// Array of hash values forming the merkle proof path.
     pub branch_hash: Vec<BlockHash>,
-    
+
     /// Bit mask indicating whether each hash is on left or right side of tree.
     pub branch_side_mask: i32,
 }

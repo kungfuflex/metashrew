@@ -15,7 +15,7 @@
 use anyhow::Result;
 use log::{error, info, warn};
 use memshrew_runtime::MemStoreAdapter;
-use metashrew_runtime::{MetashrewRuntime, KeyValueStoreLike};
+use metashrew_runtime::{KeyValueStoreLike, MetashrewRuntime};
 use std::path::PathBuf;
 
 /// Configuration for memory stress test
@@ -69,16 +69,20 @@ async fn run_memory_stress_test(config: MemoryStressConfig) -> Result<String> {
     // Max 4GB (WASM32 limit), but host constraints may prevent reaching this
     config_engine.max_wasm_stack(1024 * 1024); // 1MB stack
 
-    let engine = wasmtime::Engine::new(&config_engine)?;
-    let runtime = MetashrewRuntime::new(&wasm_bytes, storage.clone(), engine).await?;
+    let _engine = wasmtime::Engine::new(&config_engine)?;
+    let runtime = MetashrewRuntime::new(&wasm_bytes, storage.clone()).await?;
 
     // Prepare input
     let input_bytes = config.to_input_bytes();
-    info!("Input bytes length: {}, data: {:?}", input_bytes.len(), input_bytes);
+    info!(
+        "Input bytes length: {}, data: {:?}",
+        input_bytes.len(),
+        input_bytes
+    );
 
     // Set input in context
     {
-        let mut context = runtime.context.write().await;
+        let mut context = runtime.context.write().unwrap();
         context.block = input_bytes;
         context.height = config.height;
         context.db.set_height(config.height);
@@ -110,13 +114,17 @@ async fn run_memory_stress_test(config: MemoryStressConfig) -> Result<String> {
 
             for test_key in &test_keys {
                 let data = storage.get_immutable(&test_key.as_bytes().to_vec())?;
-                info!("Key '{}': {:?}", test_key, data.as_ref().map(|d| {
-                    if d.len() < 100 {
-                        String::from_utf8_lossy(d).to_string()
-                    } else {
-                        format!("{} bytes", d.len())
-                    }
-                }));
+                info!(
+                    "Key '{}': {:?}",
+                    test_key,
+                    data.as_ref().map(|d| {
+                        if d.len() < 100 {
+                            String::from_utf8_lossy(d).to_string()
+                        } else {
+                            format!("{} bytes", d.len())
+                        }
+                    })
+                );
             }
 
             // Check what result the WASM stored using SMT helper
@@ -124,22 +132,38 @@ async fn run_memory_stress_test(config: MemoryStressConfig) -> Result<String> {
             let smt_helper = SMTHelper::new(storage.clone());
 
             let result_key = format!("/memory-stress-result/{}", config.height).into_bytes();
-            info!("Looking for result at key: {:?}", String::from_utf8_lossy(&result_key));
+            info!(
+                "Looking for result at key: {:?}",
+                String::from_utf8_lossy(&result_key)
+            );
 
             // Use SMT helper to get data at this height
             let result_data = smt_helper.get_at_height(&result_key, config.height)?;
-            info!("Result data (SMT at height {}): {:?}", config.height, result_data.as_ref().map(|d| d.len()));
+            info!(
+                "Result data (SMT at height {}): {:?}",
+                config.height,
+                result_data.as_ref().map(|d| d.len())
+            );
 
             if let Some(data) = result_data {
                 let result_str = String::from_utf8_lossy(&data);
                 info!("WASM stored result: {}", result_str);
 
                 if result_str.starts_with("SUCCESS") {
-                    Ok(format!("WASM completed successfully, stored: {}", result_str))
+                    Ok(format!(
+                        "WASM completed successfully, stored: {}",
+                        result_str
+                    ))
                 } else if result_str.starts_with("ERROR") {
-                    Ok(format!("WASM completed successfully, stored: {}", result_str))
+                    Ok(format!(
+                        "WASM completed successfully, stored: {}",
+                        result_str
+                    ))
                 } else {
-                    Ok(format!("WASM completed successfully, stored: {}", result_str))
+                    Ok(format!(
+                        "WASM completed successfully, stored: {}",
+                        result_str
+                    ))
                 }
             } else {
                 Ok("WASM completed successfully, no result stored".to_string())
@@ -167,7 +191,7 @@ async fn test_memory_stress_normal_environment() -> Result<()> {
     let config = MemoryStressConfig {
         height: 1,
         allocation_size_mb: 50, // 50MB per allocation
-        num_allocations: 20,     // 20 allocations = 1GB total
+        num_allocations: 20,    // 20 allocations = 1GB total
     };
 
     info!("This test runs in a NORMAL (unconstrained) environment");
@@ -230,12 +254,16 @@ fn get_memory_info() -> Result<(u64, u64)> {
 
     for line in status.lines() {
         if line.starts_with("VmRSS:") {
-            rss_kb = line.split_whitespace().nth(1)
+            rss_kb = line
+                .split_whitespace()
+                .nth(1)
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0);
         }
         if line.starts_with("VmSize:") {
-            vm_size_kb = line.split_whitespace().nth(1)
+            vm_size_kb = line
+                .split_whitespace()
+                .nth(1)
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0);
         }
@@ -268,13 +296,19 @@ async fn test_memory_stress_gradual_increase() -> Result<()> {
         };
 
         let total_mb = allocation_mb * num_allocations;
-        info!("\n--- Testing: {}MB x {} = {}MB total ---", allocation_mb, num_allocations, total_mb);
+        info!(
+            "\n--- Testing: {}MB x {} = {}MB total ---",
+            allocation_mb, num_allocations, total_mb
+        );
 
         #[cfg(target_os = "linux")]
         {
             if let Ok((rss, vm_size)) = get_memory_info() {
-                info!("Before test - RSS: {}MB, VmSize: {}MB",
-                    rss / 1024 / 1024, vm_size / 1024 / 1024);
+                info!(
+                    "Before test - RSS: {}MB, VmSize: {}MB",
+                    rss / 1024 / 1024,
+                    vm_size / 1024 / 1024
+                );
             }
         }
 

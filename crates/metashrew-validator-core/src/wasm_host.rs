@@ -49,8 +49,8 @@ pub struct WasmValidator {
 
 impl WasmValidator {
     pub fn from_file(path: &Path) -> Result<Self> {
-        let bytes = std::fs::read(path)
-            .with_context(|| format!("reading validator {}", path.display()))?;
+        let bytes =
+            std::fs::read(path).with_context(|| format!("reading validator {}", path.display()))?;
         Self::from_bytes(&bytes, path.display().to_string())
     }
 
@@ -61,11 +61,25 @@ impl WasmValidator {
         let mut config = wasmtime::Config::default();
         config.cranelift_nan_canonicalization(true);
         config.relaxed_simd_deterministic(true);
+        // Proposal flags pinned to the wasmtime 43 defaults, as in
+        // metashrew-runtime's `indexer_config` (wasmtime 46-49 turned
+        // these on by default).
+        config.wasm_gc(false);
+        config.wasm_function_references(false);
+        config.wasm_exceptions(false);
+        config.wasm_wide_arithmetic(false);
+        config.wasm_component_model_async(false);
         // No async: validation is a synchronous call from the sync path.
         let engine = Engine::new(&config).map_err(|e| anyhow!("building validator engine: {e}"))?;
-        let module = Module::new(&engine, bytes).map_err(|e| anyhow!("compiling validator module: {e}"))?;
+        let module =
+            Module::new(&engine, bytes).map_err(|e| anyhow!("compiling validator module: {e}"))?;
 
-        let v = WasmValidator { engine, module, label, lock: Mutex::new(()) };
+        let v = WasmValidator {
+            engine,
+            module,
+            label,
+            lock: Mutex::new(()),
+        };
         // Fail at load rather than on the first block.
         v.run(&ValidationRequest {
             height: 0,
@@ -80,30 +94,39 @@ impl WasmValidator {
     fn run(&self, req: &ValidationRequest) -> Result<Verdict> {
         let _guard = self.lock.lock().unwrap_or_else(|p| p.into_inner());
 
-        let mut store = Store::new(&self.engine, ValidatorState { request: req.encode() });
+        let mut store = Store::new(
+            &self.engine,
+            ValidatorState {
+                request: req.encode(),
+            },
+        );
         let mut linker = Linker::<ValidatorState>::new(&self.engine);
 
         // Import 1: how many bytes is my request?
         linker
-            .func_wrap("env", "__request_len", |caller: Caller<'_, ValidatorState>| {
-                caller.data().request.len() as i32
-            })
+            .func_wrap(
+                "env",
+                "__request_len",
+                |caller: Caller<'_, ValidatorState>| caller.data().request.len() as i32,
+            )
             .map_err(|e| anyhow!("defining __request_len: {e}"))?;
 
         // Import 2: copy it to `ptr`. Bounds-checked against the guest's
         // own memory — a bad pointer is the guest's bug, not a host crash.
-        linker.func_wrap(
-            "env",
-            "__load_request",
-            |mut caller: Caller<'_, ValidatorState>, ptr: i32| {
-                let Some(mem) = caller.get_export("memory").and_then(|e| e.into_memory()) else {
-                    return;
-                };
-                let request = caller.data().request.clone();
-                let _ = mem.write(&mut caller, ptr as usize, &request);
-            },
-        )
-        .map_err(|e| anyhow!("defining __load_request: {e}"))?;
+        linker
+            .func_wrap(
+                "env",
+                "__load_request",
+                |mut caller: Caller<'_, ValidatorState>, ptr: i32| {
+                    let Some(mem) = caller.get_export("memory").and_then(|e| e.into_memory())
+                    else {
+                        return;
+                    };
+                    let request = caller.data().request.clone();
+                    let _ = mem.write(&mut caller, ptr as usize, &request);
+                },
+            )
+            .map_err(|e| anyhow!("defining __load_request: {e}"))?;
 
         // Anything else the module reaches for traps instead of resolving.
         linker
@@ -140,8 +163,7 @@ impl WasmValidator {
             .get(start..start + len)
             .ok_or_else(|| anyhow!("validator response length {len} runs past memory"))?;
 
-        Verdict::decode(payload)
-            .ok_or_else(|| anyhow!("validator returned a malformed verdict"))
+        Verdict::decode(payload).ok_or_else(|| anyhow!("validator returned a malformed verdict"))
     }
 }
 
@@ -272,7 +294,10 @@ mod tests {
 )"#;
         // `define_unknown_imports_as_traps` lets it instantiate but the
         // call traps, so the smoke run fails and the module is refused.
-        assert!(build(wat).is_err(), "reaching outside the sandbox must not load");
+        assert!(
+            build(wat).is_err(),
+            "reaching outside the sandbox must not load"
+        );
     }
 
     #[test]
@@ -287,6 +312,9 @@ mod tests {
     (i32.store (i32.const 60) (i32.const 4))
     (i32.const 64))
 )"#;
-        assert!(build(wat).is_err(), "a malformed verdict must not be read as accept");
+        assert!(
+            build(wat).is_err(),
+            "a malformed verdict must not be read as accept"
+        );
     }
 }

@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use rocksdb::{DB, Options};
+use rocksdb::{Options, DB};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]

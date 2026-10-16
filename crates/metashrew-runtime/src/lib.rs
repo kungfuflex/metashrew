@@ -13,7 +13,6 @@ pub mod smt;
 pub mod traits;
 pub mod view_limits;
 
-
 // Re-export core types and traits
 pub use context::MetashrewRuntimeContext;
 pub use runtime::{MetashrewRuntime, State, TIP_HEIGHT_KEY};

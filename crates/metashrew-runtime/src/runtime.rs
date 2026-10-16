@@ -70,8 +70,8 @@ use itertools::Itertools;
 use prost::Message;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use std::sync::RwLock;
+use tokio::sync::Mutex;
 use wasmtime::{Caller, Linker, Store, StoreLimits, StoreLimitsBuilder};
 
 use crate::context::MetashrewRuntimeContext;
@@ -88,8 +88,8 @@ pub const TIP_HEIGHT_KEY: &'static str = "/__INTERNAL/tip-height";
 /// metashrew indexer engine MUST use.
 ///
 /// This is the single source of truth: `MetashrewRuntime::{load,new}`
-/// call it to build both the indexer engine and (with two extra
-/// flags) the view engine. External crates that need to construct
+/// call it to build the indexer engine, and [`view_config`] builds the
+/// view engine on top of it. External crates that need to construct
 /// their own engine for testing or specialty use cases should call
 /// this rather than reach for `wasmtime::Config::default()` directly.
 ///
@@ -114,25 +114,82 @@ pub const TIP_HEIGHT_KEY: &'static str = "/__INTERNAL/tip-height";
 /// - `memory_init_cow(false)` — disable copy-on-write so two
 ///   instances of the same module don't share underlying pages.
 ///   Defense against accidental cross-instance state contamination.
-/// - `async_support(true)` — required because the indexer runs via
-///   `instantiate_async` + `start.call_async`.
 ///
-/// Flags intentionally NOT set on the indexer engine, but flipped
-/// on the VIEW engine in `load()`/`new()`:
-/// - `wasm_threads(true)` — view-only. Consensus-critical that the
-///   indexer wasm cannot use shared memory + atomics; those
-///   semantics are not deterministic across thread schedules.
-/// - `consume_fuel(true)` — view-only. The indexer doesn't meter
-///   per-instruction fuel (it metered per-block via FuelTank at
-///   the alkanes layer).
+/// Pinned explicitly to the values wasmtime 43 used by default (the
+/// engine production indexed with through v9.1.0-rc.1), so a wasmtime
+/// upgrade cannot change them silently. Verified by printing the
+/// effective `Config` under 43.0.0 and 49.0.2:
+/// - `strategy(Cranelift)`, `cranelift_opt_level(Speed)` — unchanged
+///   defaults, pinned for the record.
+/// - `wasm_gc(false)`, `wasm_function_references(false)`,
+///   `wasm_exceptions(false)` — turned on by default in wasmtime 47.
+/// - `wasm_wide_arithmetic(false)` — on by default in wasmtime 49.
+/// - `wasm_component_model_async(false)` — on by default in wasmtime
+///   46 (components only; core modules are unaffected either way).
+/// - `wasm_threads(true)` — this was ALREADY the effective default on
+///   the indexer engine under 43 (wasmtime enables threads by default
+///   when built with its `threads` feature), despite earlier docs here
+///   saying the indexer had it off. It is pinned to its real historical
+///   value; turning it off would change which modules validate.
+///
+/// `async_support(true)` used to be called here; it has been a
+/// deprecated no-op since wasmtime 43 (async is decided per call), so
+/// it is gone.
 pub fn indexer_config() -> wasmtime::Config {
     let mut config = wasmtime::Config::default();
+    config.strategy(wasmtime::Strategy::Cranelift);
+    config.cranelift_opt_level(wasmtime::OptLevel::Speed);
     config.cranelift_nan_canonicalization(true);
     config.relaxed_simd_deterministic(true);
     config.memory_reservation(0x100000000);
     config.memory_guard_size(0x10000);
     config.memory_init_cow(false);
-    config.async_support(true);
+    // Proposal flags as wasmtime 43 had them (see above).
+    config.wasm_threads(true);
+    config.wasm_gc(false);
+    config.wasm_function_references(false);
+    config.wasm_exceptions(false);
+    config.wasm_wide_arithmetic(false);
+    config.wasm_component_model_async(false);
+    config
+}
+
+/// The VIEW engine's config: [`indexer_config`] plus fuel metering.
+///
+/// - `consume_fuel(true)` — view-only. Views run with `u64::MAX` fuel;
+///   fuel exists to drive `fuel_async_yield_interval`, so its cost
+///   model only changes how often a view yields, never its result. The
+///   indexer doesn't meter per-instruction fuel (alkanes meters per
+///   block via FuelTank).
+/// - variable operator costs = 0 — wasmtime 46 started charging
+///   `memory.{copy,fill,init}`, `table.*` and `array.*` per byte/element
+///   (and 48 made it configurable). Zeroing the variable part restores
+///   the wasmtime 43 model, where every operator had a flat cost, so
+///   view yield cadence is what it was.
+/// - `wasm_threads(true)` — same as the indexer engine (see there);
+///   kept as an explicit call for the record.
+pub fn view_config() -> wasmtime::Config {
+    let mut config = indexer_config();
+    config.consume_fuel(true);
+    config.wasm_threads(true);
+    let mut cost = wasmtime::OperatorCost::new();
+    cost.variable.memory_copy_per_byte = 0;
+    cost.variable.memory_fill_per_byte = 0;
+    cost.variable.memory_init_per_byte = 0;
+    cost.variable.memory_grow_per_page = 0;
+    cost.variable.table_copy_per_element = 0;
+    cost.variable.table_fill_per_element = 0;
+    cost.variable.table_init_per_element = 0;
+    cost.variable.table_grow_per_element = 0;
+    cost.variable.array_copy_per_element = 0;
+    cost.variable.array_fill_per_element = 0;
+    cost.variable.array_new_data_per_element = 0;
+    cost.variable.array_init_data_per_element = 0;
+    cost.variable.array_new_elem_per_element = 0;
+    cost.variable.array_init_elem_per_element = 0;
+    cost.variable.array_new_default_per_element = 0;
+    cost.variable.array_new_per_element = 0;
+    config.operator_cost(cost);
     config
 }
 
@@ -317,7 +374,7 @@ pub struct MetashrewRuntime<T: KeyValueStoreLike> {
     /// Protected by [`Arc<Mutex<_>>`] for thread-safe access across
     /// different execution modes and concurrent view operations.
     pub context: Arc<RwLock<MetashrewRuntimeContext<T>>>,
-    
+
     /// Synchronous Wasmtime engine for block processing
     ///
     /// Configured for deterministic execution with:
@@ -325,31 +382,31 @@ pub struct MetashrewRuntime<T: KeyValueStoreLike> {
     /// - Relaxed SIMD determinism
     /// - Static memory allocation
     pub engine: wasmtime::Engine,
-    
+
     /// Asynchronous Wasmtime engine for view functions
     ///
     /// Supports cooperative yielding and fuel-based execution limits
     /// for long-running view operations that need to yield control.
     pub async_engine: wasmtime::Engine,
-    
+
     /// Compiled WASM module for asynchronous execution
     ///
     /// Used by view functions and other operations that need
     /// cooperative yielding and async execution.
     pub async_module: wasmtime::Module,
-    
+
     /// Compiled WASM module for synchronous execution
     ///
     /// Used for block processing and other operations that
     /// need deterministic, non-yielding execution.
     pub module: wasmtime::Module,
-    
+
     /// Host function linker providing database and I/O operations
     ///
     /// Binds host functions like `__get`, `__flush`, `__log` that
     /// WASM modules can call to interact with the database and runtime.
     pub linker: wasmtime::Linker<State>,
-    
+
     /// Instantiated WASM module ready for execution
     ///
     /// Contains the loaded and linked WASM instance with all
@@ -483,7 +540,10 @@ impl<T: KeyValueStoreLike + Clone + Send + Sync + 'static> MetashrewRuntime<T> {
     ///     my_storage_backend
     /// )?;
     /// ```
-    pub async fn load(indexer: PathBuf, mut store: T) -> Result<Self> where <T as KeyValueStoreLike>::Batch: Send {
+    pub async fn load(indexer: PathBuf, mut store: T) -> Result<Self>
+    where
+        <T as KeyValueStoreLike>::Batch: Send,
+    {
         // Both engines are built from the same deterministic-config base
         // (see `indexer_config`). The view engine adds consume_fuel +
         // wasm_threads (defense-in-depth — v9 doesn't expose the
@@ -509,15 +569,15 @@ impl<T: KeyValueStoreLike + Clone + Send + Sync + 'static> MetashrewRuntime<T> {
         let config = indexer_config();
         let engine = wasmtime::Engine::new(&config)?;
 
-        let mut async_config = config.clone();
-        async_config.consume_fuel(true);
-        async_config.wasm_threads(true);
+        let async_config = view_config();
 
         let async_engine = wasmtime::Engine::new(&async_config)?;
         let module = wasmtime::Module::from_file(&engine, indexer.clone().into_os_string())
-            .map_err(|e| anyhow::anyhow!("{}", e)).context("Failed to load WASM module")?;
+            .map_err(|e| anyhow::anyhow!("{}", e))
+            .context("Failed to load WASM module")?;
         let async_module = wasmtime::Module::from_file(&async_engine, indexer.into_os_string())
-            .map_err(|e| anyhow::anyhow!("{}", e)).context("Failed to load WASM module")?;
+            .map_err(|e| anyhow::anyhow!("{}", e))
+            .context("Failed to load WASM module")?;
         let mut linker = Linker::<State>::new(&engine);
         let mut wasmstore = Store::<State>::new(&engine, State::new());
         let tip_height = match store.get(&TIP_HEIGHT_KEY.as_bytes().to_vec()) {
@@ -535,15 +595,21 @@ impl<T: KeyValueStoreLike + Clone + Send + Sync + 'static> MetashrewRuntime<T> {
             wasmstore.limiter(|state| &mut state.limits)
         }
         {
-            Self::setup_linker(context.clone(), &mut linker).await
-                .map_err(|e| anyhow::anyhow!("{}", e)).context("Failed to setup basic linker")?;
-            Self::setup_linker_indexer(context.clone(), &mut linker).await
-                .map_err(|e| anyhow::anyhow!("{}", e)).context("Failed to setup indexer linker")?;
+            Self::setup_linker(context.clone(), &mut linker)
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e))
+                .context("Failed to setup basic linker")?;
+            Self::setup_linker_indexer(context.clone(), &mut linker)
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e))
+                .context("Failed to setup indexer linker")?;
             linker.define_unknown_imports_as_traps(&module)?;
         }
         let instance = linker
-            .instantiate_async(&mut wasmstore, &module).await
-            .map_err(|e| anyhow::anyhow!("{}", e)).context("Failed to instantiate WASM module")?;
+            .instantiate_async(&mut wasmstore, &module)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))
+            .context("Failed to instantiate WASM module")?;
         Ok(MetashrewRuntime {
             async_engine,
             engine,
@@ -551,25 +617,31 @@ impl<T: KeyValueStoreLike + Clone + Send + Sync + 'static> MetashrewRuntime<T> {
             module,
             linker,
             context,
-            instance: Mutex::new(WasmInstance { store: wasmstore, instance }),
+            instance: Mutex::new(WasmInstance {
+                store: wasmstore,
+                instance,
+            }),
         })
     }
 
-    pub async fn new(indexer: &[u8], mut store: T) -> Result<Self> where <T as KeyValueStoreLike>::Batch: Send {
+    pub async fn new(indexer: &[u8], mut store: T) -> Result<Self>
+    where
+        <T as KeyValueStoreLike>::Batch: Send,
+    {
         // See `load()` for the rationale on internal engine construction.
         // Same deterministic-config base; same indexer/view split.
         let config = indexer_config();
         let engine = wasmtime::Engine::new(&config)?;
 
-        let mut async_config = config.clone();
-        async_config.consume_fuel(true);
-        async_config.wasm_threads(true);
+        let async_config = view_config();
 
         let async_engine = wasmtime::Engine::new(&async_config)?;
         let module = wasmtime::Module::new(&engine, indexer)
-            .map_err(|e| anyhow::anyhow!("{}", e)).context("Failed to load WASM module from bytes")?;
+            .map_err(|e| anyhow::anyhow!("{}", e))
+            .context("Failed to load WASM module from bytes")?;
         let async_module = wasmtime::Module::new(&async_engine, indexer)
-            .map_err(|e| anyhow::anyhow!("{}", e)).context("Failed to load async WASM module from bytes")?;
+            .map_err(|e| anyhow::anyhow!("{}", e))
+            .context("Failed to load async WASM module from bytes")?;
         let mut linker = Linker::<State>::new(&engine);
         let mut wasmstore = Store::<State>::new(&engine, State::new());
         let tip_height = match store.get(&TIP_HEIGHT_KEY.as_bytes().to_vec()) {
@@ -587,19 +659,26 @@ impl<T: KeyValueStoreLike + Clone + Send + Sync + 'static> MetashrewRuntime<T> {
             wasmstore.limiter(|state| &mut state.limits)
         }
         {
-            Self::setup_linker(context.clone(), &mut linker).await
-                .map_err(|e| anyhow::anyhow!("{}", e)).context("Failed to setup basic linker")?;
-            Self::setup_linker_indexer(context.clone(), &mut linker).await
-                .map_err(|e| anyhow::anyhow!("{}", e)).context("Failed to setup indexer linker")?;
+            Self::setup_linker(context.clone(), &mut linker)
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e))
+                .context("Failed to setup basic linker")?;
+            Self::setup_linker_indexer(context.clone(), &mut linker)
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e))
+                .context("Failed to setup indexer linker")?;
             linker.define_unknown_imports_as_traps(&module)?;
         }
         let instance = linker
-            .instantiate_async(&mut wasmstore, &module).await
-            .map_err(|e| anyhow::anyhow!("{}", e)).context("Failed to instantiate WASM module")?;
+            .instantiate_async(&mut wasmstore, &module)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))
+            .context("Failed to instantiate WASM module")?;
 
         // Force OS to commit all 4GB pages to verify memory is available
         // This ensures deterministic execution - runtime fails fast if 4GB not available
-        let memory = instance.get_memory(&mut wasmstore, "memory")
+        let memory = instance
+            .get_memory(&mut wasmstore, "memory")
             .ok_or_else(|| anyhow!("Failed to get WASM memory for pre-allocation"))?;
         Self::force_initial_memory_commit(&memory, &mut wasmstore)
             .context("Failed to pre-allocate 4GB WASM memory. \
@@ -612,7 +691,10 @@ impl<T: KeyValueStoreLike + Clone + Send + Sync + 'static> MetashrewRuntime<T> {
             module,
             linker,
             context,
-            instance: Mutex::new(WasmInstance { store: wasmstore, instance }),
+            instance: Mutex::new(WasmInstance {
+                store: wasmstore,
+                instance,
+            }),
         })
     }
 
@@ -683,114 +765,148 @@ impl<T: KeyValueStoreLike + Clone + Send + Sync + 'static> MetashrewRuntime<T> {
         symbol: String,
         input: &Vec<u8>,
         height: u32,
-    ) -> Result<Vec<u8>> where <T as KeyValueStoreLike>::Batch: Send {
+    ) -> Result<Vec<u8>>
+    where
+        <T as KeyValueStoreLike>::Batch: Send,
+    {
         // Create preview context with isolated DB copy
-                        let preview_db = {
-                            let guard = self.context.read().unwrap();
-                            guard.db.create_isolated_copy()
-                        };
-                
-                        // Create a new runtime with preview db using the async engine
-                        // Process the preview block at height + 1 to simulate adding it after the target height
-                        let preview_height = height + 1;
-                        
-                        // Use new_with_db_indexer which sets up proper indexer linker for processing blocks
-                        let runtime =
-                            Self::new_with_db_indexer(preview_db, preview_height, self.async_engine.clone(), self.async_module.clone()).await?;
-                        runtime.context.write().unwrap().block = block.clone();
-                
-                        // Execute block via _start to populate preview db
-                        {
-                            let mut instance_guard = runtime.instance.lock().await;
-                        let WasmInstance { ref mut store, instance } = &mut *instance_guard;
-                            let start = instance
-                                .get_typed_func::<(), ()>(&mut *store, "_start")
-                                .map_err(|e| anyhow::anyhow!("{}", e)).context("Failed to get _start function for preview")?;
-                
-                            // Use call_async since we're using an async store
-                            match start.call_async(&mut *store, ()).await {
-                                Ok(_) => {
-                                    let context_guard = runtime.context.read().unwrap();
-                                    let had_failure = store.data().had_failure;
-                                    let state = context_guard.state.load(std::sync::atomic::Ordering::SeqCst);
-                                    if state != 1 && !had_failure {
-                                        return Err(anyhow!("indexer exited unexpectedly during preview: state={}, had_failure={}", state, had_failure));
-                                    }
-                                    if had_failure {
-                                        return Err(anyhow!("indexer had failure during preview execution: state={}", state));
-                                    }
-                                }
-                                Err(e) => {
-                                    log::error!("Preview _start execution failed: {:?}", e);
-                                    return Err(anyhow::anyhow!("{}", e)).context("Error executing _start in preview");
-                                },
-                            }
-                        }
-                
-                        // Create new runtime just for the view using the updated preview DB
-                        // Query at the preview height to see the state after processing the preview block
-                        let view_runtime = {
-                            let preview_db = {
-                                let ctx = runtime.context.read().unwrap();
-                                ctx.db.clone()
-                            };
-                            let mut linker = Linker::<State>::new(&self.engine);
-                            let mut wasmstore = Store::<State>::new(&self.engine, State::new());
-                            let view_context = Arc::<RwLock<MetashrewRuntimeContext<T>>>::new(RwLock::new(
-                                MetashrewRuntimeContext::new(preview_db, preview_height, vec![]),
-                            ));
-                
-                            wasmstore.limiter(|state| &mut state.limits);
-                
-                            Self::setup_linker(view_context.clone(), &mut linker).await
-                                .map_err(|e| anyhow::anyhow!("{}", e)).context("Failed to setup basic linker for preview view")?;
-                            Self::setup_linker_view(view_context.clone(), &mut linker).await
-                                .map_err(|e| anyhow::anyhow!("{}", e)).context("Failed to setup view linker for preview")?;
-                            linker.define_unknown_imports_as_traps(&self.module)?;
-                
-                            let instance = linker
-                                .instantiate_async(&mut wasmstore, &self.module)
-                                .await
-                                .map_err(|e| anyhow::anyhow!("{}", e)).context("Failed to instantiate WASM module for preview view")?;
-                
-                            MetashrewRuntime {
-                                engine: self.engine.clone(),
-                                async_engine: self.engine.clone(),
-                                module: self.module.clone(),
-                                async_module: self.module.clone(),
-                                linker,
-                                context: view_context,
-                                instance: Mutex::new(WasmInstance { store: wasmstore, instance }),
-                            }
-                        };
-                
-                        // Set block to input for view
-                        view_runtime.context.write().unwrap().block = input.clone();
-                
-                        // Execute view function
-                        let result = {
-                            let mut instance_guard = view_runtime.instance.lock().await;
-                        let WasmInstance { ref mut store, instance } = &mut *instance_guard;
-                            let func = instance
-                                .get_typed_func::<(), i32>(&mut *store, symbol.as_str())
-                                .map_err(|e| anyhow::anyhow!("{}", e)).context("Failed to get view function")?;
-                
-                            // Use call_async since we're using an async store
-                            let result = func
-                                .call_async(&mut *store, ()).await
-                                .map_err(|e| anyhow::anyhow!("{}", e)).context("Failed to execute view function")?;
-                
-                            let memory = instance
-                                .get_memory(&mut *store, "memory")
-                                .ok_or_else(|| anyhow!("Failed to get memory for view result"))?;
-                
-                            // Get the final result
-                            read_arraybuffer_as_vec(
-                                memory.data(&*store),
-                                result,
-                            )
-                        };
-                        Ok(result)    }
+        let preview_db = {
+            let guard = self.context.read().unwrap();
+            guard.db.create_isolated_copy()
+        };
+
+        // Create a new runtime with preview db using the async engine
+        // Process the preview block at height + 1 to simulate adding it after the target height
+        let preview_height = height + 1;
+
+        // Use new_with_db_indexer which sets up proper indexer linker for processing blocks
+        let runtime = Self::new_with_db_indexer(
+            preview_db,
+            preview_height,
+            self.async_engine.clone(),
+            self.async_module.clone(),
+        )
+        .await?;
+        runtime.context.write().unwrap().block = block.clone();
+
+        // Execute block via _start to populate preview db
+        {
+            let mut instance_guard = runtime.instance.lock().await;
+            let WasmInstance {
+                ref mut store,
+                instance,
+            } = &mut *instance_guard;
+            let start = instance
+                .get_typed_func::<(), ()>(&mut *store, "_start")
+                .map_err(|e| anyhow::anyhow!("{}", e))
+                .context("Failed to get _start function for preview")?;
+
+            // Use call_async since we're using an async store
+            match start.call_async(&mut *store, ()).await {
+                Ok(_) => {
+                    let context_guard = runtime.context.read().unwrap();
+                    let had_failure = store.data().had_failure;
+                    let state = context_guard
+                        .state
+                        .load(std::sync::atomic::Ordering::SeqCst);
+                    if state != 1 && !had_failure {
+                        return Err(anyhow!(
+                            "indexer exited unexpectedly during preview: state={}, had_failure={}",
+                            state,
+                            had_failure
+                        ));
+                    }
+                    if had_failure {
+                        return Err(anyhow!(
+                            "indexer had failure during preview execution: state={}",
+                            state
+                        ));
+                    }
+                }
+                Err(e) => {
+                    log::error!("Preview _start execution failed: {:?}", e);
+                    return Err(anyhow::anyhow!("{}", e))
+                        .context("Error executing _start in preview");
+                }
+            }
+        }
+
+        // Create new runtime just for the view using the updated preview DB
+        // Query at the preview height to see the state after processing the preview block
+        let view_runtime = {
+            let preview_db = {
+                let ctx = runtime.context.read().unwrap();
+                ctx.db.clone()
+            };
+            let mut linker = Linker::<State>::new(&self.engine);
+            let mut wasmstore = Store::<State>::new(&self.engine, State::new());
+            let view_context = Arc::<RwLock<MetashrewRuntimeContext<T>>>::new(RwLock::new(
+                MetashrewRuntimeContext::new(preview_db, preview_height, vec![]),
+            ));
+
+            wasmstore.limiter(|state| &mut state.limits);
+
+            Self::setup_linker(view_context.clone(), &mut linker)
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e))
+                .context("Failed to setup basic linker for preview view")?;
+            Self::setup_linker_view(view_context.clone(), &mut linker)
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e))
+                .context("Failed to setup view linker for preview")?;
+            linker.define_unknown_imports_as_traps(&self.module)?;
+
+            let instance = linker
+                .instantiate_async(&mut wasmstore, &self.module)
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e))
+                .context("Failed to instantiate WASM module for preview view")?;
+
+            MetashrewRuntime {
+                engine: self.engine.clone(),
+                async_engine: self.engine.clone(),
+                module: self.module.clone(),
+                async_module: self.module.clone(),
+                linker,
+                context: view_context,
+                instance: Mutex::new(WasmInstance {
+                    store: wasmstore,
+                    instance,
+                }),
+            }
+        };
+
+        // Set block to input for view
+        view_runtime.context.write().unwrap().block = input.clone();
+
+        // Execute view function
+        let result = {
+            let mut instance_guard = view_runtime.instance.lock().await;
+            let WasmInstance {
+                ref mut store,
+                instance,
+            } = &mut *instance_guard;
+            let func = instance
+                .get_typed_func::<(), i32>(&mut *store, symbol.as_str())
+                .map_err(|e| anyhow::anyhow!("{}", e))
+                .context("Failed to get view function")?;
+
+            // Use call_async since we're using an async store
+            let result = func
+                .call_async(&mut *store, ())
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e))
+                .context("Failed to execute view function")?;
+
+            let memory = instance
+                .get_memory(&mut *store, "memory")
+                .ok_or_else(|| anyhow!("Failed to get memory for view result"))?;
+
+            // Get the final result
+            read_arraybuffer_as_vec(memory.data(&*store), result)
+        };
+        Ok(result)
+    }
 
     // Async version of preview for use with the view server
     pub async fn preview_async(
@@ -799,7 +915,10 @@ impl<T: KeyValueStoreLike + Clone + Send + Sync + 'static> MetashrewRuntime<T> {
         symbol: String,
         input: &Vec<u8>,
         height: u32,
-    ) -> Result<Vec<u8>> where <T as KeyValueStoreLike>::Batch: Send {
+    ) -> Result<Vec<u8>>
+    where
+        <T as KeyValueStoreLike>::Batch: Send,
+    {
         // For now, just use the synchronous version
         // In the future, we can implement a fully async version if needed
         self.preview(block, symbol, input, height).await
@@ -875,82 +994,80 @@ impl<T: KeyValueStoreLike + Clone + Send + Sync + 'static> MetashrewRuntime<T> {
     /// - Database query fails or times out
     /// - WASM execution encounters an error
     /// - Memory access violations occur
-        pub async fn view(&self, symbol: String, input: &Vec<u8>, height: u32) -> Result<Vec<u8>> {
-            self.view_with_limits(symbol, input, height, None).await
-        }
+    pub async fn view(&self, symbol: String, input: &Vec<u8>, height: u32) -> Result<Vec<u8>> {
+        self.view_with_limits(symbol, input, height, None).await
+    }
 
-        /// Same as [`view`] but allows the caller to thread per-view
-        /// [`wasmtime::StoreLimits`] (e.g. capping linear-memory growth at
-        /// `--view-memory-mb`).
-        ///
-        /// v9.0.5-rc.2: under heavy view-call load the view path was
-        /// previously the dominant memory-allocator in the indexer
-        /// process — sustained mallocs across N concurrent stores OOM-killed
-        /// the indexer thread. With a per-view memory cap, growths beyond
-        /// the budget trap the WASM cleanly and surface as a
-        /// `ResourceExhausted`-style error to the JSON-RPC caller instead
-        /// of bringing down the process.
-        ///
-        /// **Important**: this only affects the view path. The indexer
-        /// store (created by `new` / `new_with_db_indexer`) still uses
-        /// unbounded `StoreLimits` so block-application can grow memory as
-        /// needed for normal block processing.
-        pub async fn view_with_limits(
-            &self,
-            symbol: String,
-            input: &Vec<u8>,
-            height: u32,
-            store_limits: Option<StoreLimits>,
-        ) -> Result<Vec<u8>> {
-            let db = {
-                let guard = self.context.read().unwrap();
-                guard.db.clone()
-            };
+    /// Same as [`view`] but allows the caller to thread per-view
+    /// [`wasmtime::StoreLimits`] (e.g. capping linear-memory growth at
+    /// `--view-memory-mb`).
+    ///
+    /// v9.0.5-rc.2: under heavy view-call load the view path was
+    /// previously the dominant memory-allocator in the indexer
+    /// process — sustained mallocs across N concurrent stores OOM-killed
+    /// the indexer thread. With a per-view memory cap, growths beyond
+    /// the budget trap the WASM cleanly and surface as a
+    /// `ResourceExhausted`-style error to the JSON-RPC caller instead
+    /// of bringing down the process.
+    ///
+    /// **Important**: this only affects the view path. The indexer
+    /// store (created by `new` / `new_with_db_indexer`) still uses
+    /// unbounded `StoreLimits` so block-application can grow memory as
+    /// needed for normal block processing.
+    pub async fn view_with_limits(
+        &self,
+        symbol: String,
+        input: &Vec<u8>,
+        height: u32,
+        store_limits: Option<StoreLimits>,
+    ) -> Result<Vec<u8>> {
+        let db = {
+            let guard = self.context.read().unwrap();
+            guard.db.clone()
+        };
 
-            // Create a new async runtime for the view, optionally with a
-            // memory-capping StoreLimits.
-            let view_runtime = Self::new_with_db_async_limited(
-                db,
-                height,
-                self.async_engine.clone(),
-                self.async_module.clone(),
-                store_limits,
-            )
-            .await?;
+        // Create a new async runtime for the view, optionally with a
+        // memory-capping StoreLimits.
+        let view_runtime = Self::new_with_db_async_limited(
+            db,
+            height,
+            self.async_engine.clone(),
+            self.async_module.clone(),
+            store_limits,
+        )
+        .await?;
 
-            // Set the input as the block data
-            view_runtime.context.write().unwrap().block = input.clone();
+        // Set the input as the block data
+        view_runtime.context.write().unwrap().block = input.clone();
 
-            // Set fuel for cooperative yielding
-            let result = {
-                let mut instance_guard = view_runtime.instance.lock().await;
-                let WasmInstance { store, instance } = &mut *instance_guard;
-                store.set_fuel(u64::MAX)?;
-                store
-                    .fuel_async_yield_interval(Some(10000))?;
+        // Set fuel for cooperative yielding
+        let result = {
+            let mut instance_guard = view_runtime.instance.lock().await;
+            let WasmInstance { store, instance } = &mut *instance_guard;
+            store.set_fuel(u64::MAX)?;
+            store.fuel_async_yield_interval(Some(10000))?;
 
-                // Execute view function
-                let func = instance
-                    .get_typed_func::<(), i32>(&mut *store, symbol.as_str())
-                    .map_err(|e| anyhow::anyhow!("{}", e)).with_context(|| format!("Failed to get view function '{}'", symbol))?;
+            // Execute view function
+            let func = instance
+                .get_typed_func::<(), i32>(&mut *store, symbol.as_str())
+                .map_err(|e| anyhow::anyhow!("{}", e))
+                .with_context(|| format!("Failed to get view function '{}'", symbol))?;
 
-                // Use async call
-                let result = func
-                    .call_async(&mut *store, ())
-                    .await
-                    .map_err(|e| anyhow::anyhow!("{}", e)).with_context(|| format!("Failed to execute view function '{}'", symbol))?;
+            // Use async call
+            let result = func
+                .call_async(&mut *store, ())
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e))
+                .with_context(|| format!("Failed to execute view function '{}'", symbol))?;
 
-                let memory = instance
-                    .get_memory(&mut *store, "memory")
-                    .ok_or_else(|| anyhow!("Failed to get memory for view result"))?;
+            let memory = instance
+                .get_memory(&mut *store, "memory")
+                .ok_or_else(|| anyhow!("Failed to get memory for view result"))?;
 
-                Ok(read_arraybuffer_as_vec(
-                    memory.data(store),
-                    result,
-                ))
-            };
-            result
-        }
+            Ok(read_arraybuffer_as_vec(memory.data(store), result))
+        };
+        result
+    }
 
     /// Force OS to commit all 4GB pages at initial instantiation to verify memory availability.
     ///
@@ -962,7 +1079,10 @@ impl<T: KeyValueStoreLike + Clone + Send + Sync + 'static> MetashrewRuntime<T> {
     /// 2. Fail immediately at startup with insufficient memory error
     ///
     /// Expected time: 100-500ms (one-time cost at startup)
-    fn force_initial_memory_commit(memory: &wasmtime::Memory, store: &mut Store<State>) -> Result<()> {
+    fn force_initial_memory_commit(
+        memory: &wasmtime::Memory,
+        store: &mut Store<State>,
+    ) -> Result<()> {
         const WASM_PAGE_SIZE: usize = 65536; // 64KB
         const WASM_MAX_PAGES: u64 = 65536; // 4GB / 64KB = 65,536 pages
 
@@ -971,7 +1091,8 @@ impl<T: KeyValueStoreLike + Clone + Send + Sync + 'static> MetashrewRuntime<T> {
 
         // First, check current memory size
         let initial_pages = memory.size(&*store);
-        log::debug!("Initial WASM memory size: {} pages ({}MB)",
+        log::debug!(
+            "Initial WASM memory size: {} pages ({}MB)",
             initial_pages,
             (initial_pages as usize * WASM_PAGE_SIZE) / (1024 * 1024)
         );
@@ -980,18 +1101,25 @@ impl<T: KeyValueStoreLike + Clone + Send + Sync + 'static> MetashrewRuntime<T> {
         // This will fail if the host doesn't have 4GB available
         let pages_to_grow = WASM_MAX_PAGES.saturating_sub(initial_pages);
         if pages_to_grow > 0 {
-            log::debug!("Growing memory by {} pages to reach 4GB maximum...", pages_to_grow);
-            memory.grow(&mut *store, pages_to_grow)
-                .map_err(|e| anyhow::anyhow!("{}", e)).with_context(|| {
+            log::debug!(
+                "Growing memory by {} pages to reach 4GB maximum...",
+                pages_to_grow
+            );
+            memory
+                .grow(&mut *store, pages_to_grow)
+                .map_err(|e| anyhow::anyhow!("{}", e))
+                .with_context(|| {
                     format!(
                         "Failed to grow WASM memory from {} pages to {} pages (4GB total). \
                          This indicates insufficient physical memory available. \
                          WASM32 requires 4GB of available memory for deterministic execution.",
-                        initial_pages,
-                        WASM_MAX_PAGES
+                        initial_pages, WASM_MAX_PAGES
                     )
                 })?;
-            log::debug!("Memory grown successfully to {} pages (4GB)", WASM_MAX_PAGES);
+            log::debug!(
+                "Memory grown successfully to {} pages (4GB)",
+                WASM_MAX_PAGES
+            );
         }
 
         // Now touch NEW pages (after initial_pages) to force OS to commit physical memory
@@ -1009,8 +1137,10 @@ impl<T: KeyValueStoreLike + Clone + Send + Sync + 'static> MetashrewRuntime<T> {
             let offset = page_num * WASM_PAGE_SIZE;
 
             // Touch the page to force physical allocation (just write zeros to new pages)
-            memory.write(&mut *store, offset, &zero_block)
-                .map_err(|e| anyhow::anyhow!("{}", e)).with_context(|| {
+            memory
+                .write(&mut *store, offset, &zero_block)
+                .map_err(|e| anyhow::anyhow!("{}", e))
+                .with_context(|| {
                     format!(
                         "Failed to commit memory page {} of {} (offset 0x{:x}). \
                          This indicates insufficient physical memory available. \
@@ -1059,7 +1189,8 @@ impl<T: KeyValueStoreLike + Clone + Send + Sync + 'static> MetashrewRuntime<T> {
         // Zero out all currently allocated pages
         for page_num in 0..current_pages {
             let offset = page_num * WASM_PAGE_SIZE;
-            memory.write(&mut *store, offset, &zero_page)
+            memory
+                .write(&mut *store, offset, &zero_page)
                 .with_context(|| format!("Failed to zero memory page {}", page_num))?;
         }
 
@@ -1084,7 +1215,8 @@ impl<T: KeyValueStoreLike + Clone + Send + Sync + 'static> MetashrewRuntime<T> {
             .linker
             .instantiate_async(&mut wasmstore, &self.module)
             .await
-            .map_err(|e| anyhow::anyhow!("{}", e)).context("Failed to instantiate module during memory refresh")?;
+            .map_err(|e| anyhow::anyhow!("{}", e))
+            .context("Failed to instantiate module during memory refresh")?;
 
         *instance_guard = WasmInstance {
             store: wasmstore,
@@ -1173,12 +1305,16 @@ impl<T: KeyValueStoreLike + Clone + Send + Sync + 'static> MetashrewRuntime<T> {
 
         let execution_result = {
             let mut instance_guard = self.instance.lock().await;
-            let WasmInstance { ref mut store, instance } = &mut *instance_guard;
+            let WasmInstance {
+                ref mut store,
+                instance,
+            } = &mut *instance_guard;
             // Clear any error captured by a previous block before this run.
             *store.data().last_flush_error.lock().unwrap() = None;
             let start = instance
                 .get_typed_func::<(), ()>(&mut *store, "_start")
-                .map_err(|e| anyhow::anyhow!("{}", e)).context("Failed to get _start function")?;
+                .map_err(|e| anyhow::anyhow!("{}", e))
+                .context("Failed to get _start function")?;
 
             // Note: Chain reorganization detection is now handled at the sync framework level
             // using proper block hash comparison, not at the runtime level
@@ -1190,10 +1326,19 @@ impl<T: KeyValueStoreLike + Clone + Send + Sync + 'static> MetashrewRuntime<T> {
                     if let Some(msg) = captured_err {
                         log::error!("Block {} __flush atomic write failed: {}", height, msg);
                         Err(anyhow!("__flush atomic write failed: {}", msg))
-                    } else if self.context.read().unwrap().state.load(std::sync::atomic::Ordering::SeqCst) != 1
+                    } else if self
+                        .context
+                        .read()
+                        .unwrap()
+                        .state
+                        .load(std::sync::atomic::Ordering::SeqCst)
+                        != 1
                         && !store.data().had_failure
                     {
-                        log::error!("Block {} indexer exited unexpectedly (state != 1 and no failure)", height);
+                        log::error!(
+                            "Block {} indexer exited unexpectedly (state != 1 and no failure)",
+                            height
+                        );
                         Err(anyhow!("indexer exited unexpectedly"))
                     } else if store.data().had_failure {
                         log::error!("Block {} indexer host function reported failure", height);
@@ -1213,7 +1358,11 @@ impl<T: KeyValueStoreLike + Clone + Send + Sync + 'static> MetashrewRuntime<T> {
         // ALWAYS refresh memory after block execution for deterministic behavior
         // This ensures no WASM state persists between blocks
         if let Err(refresh_err) = self.refresh_memory().await {
-            log::error!("Block {} failed to refresh memory after block execution: {}", height, refresh_err);
+            log::error!(
+                "Block {} failed to refresh memory after block execution: {}",
+                height,
+                refresh_err
+            );
             // Return the refresh error as it's critical for deterministic execution
             return Err(refresh_err).context("Memory refresh failed after block execution");
         }
@@ -1430,52 +1579,26 @@ impl<T: KeyValueStoreLike + Clone + Send + Sync + 'static> MetashrewRuntime<T> {
         Ok(())
     }
 
-pub async fn setup_linker_view(
-
+    pub async fn setup_linker_view(
         context: Arc<RwLock<MetashrewRuntimeContext<T>>>,
 
         linker: &mut Linker<State>,
-
     ) -> Result<()> {
-
         let context_get = context.clone();
 
         let context_get_len = context.clone();
 
-
-
-                linker
-
-
-
-                    .func_wrap_async(
-
-
-
-                        "env",
-
-
-
-                        "__flush",
-
-
-
-                        move |_caller: Caller<'_, State>, (_encoded,): (i32,)| {
-                            Box::new(async move {
-                                // View mode __flush - no operation needed
-                            })
-
-
-
-                        },
-
-
-
-                    )
-
+        linker
+            .func_wrap_async(
+                "env",
+                "__flush",
+                move |_caller: Caller<'_, State>, (_encoded,): (i32,)| {
+                    Box::new(async move {
+                        // View mode __flush - no operation needed
+                    })
+                },
+            )
             .map_err(|e| anyhow!("Failed to wrap __flush: {:?}", e))?;
-
-
 
         linker
 
@@ -1549,16 +1672,10 @@ pub async fn setup_linker_view(
 
             .map_err(|e| anyhow!("Failed to wrap __get: {:?}", e))?;
 
-
-
         linker
-
             .func_wrap_async(
-
                 "env",
-
                 "__get_len",
-
                 move |mut caller: Caller<'_, State>, (key,): (i32,)| {
                     let context_get_len = context_get_len.clone();
 
@@ -1567,58 +1684,43 @@ pub async fn setup_linker_view(
                             Some(export) => match export.into_memory() {
                                 Some(memory) => memory,
                                 None => return i32::MAX,
-
                             },
 
                             None => return i32::MAX,
-
                         };
-
-
 
                         let data = mem.data(&caller);
 
                         let height = context_get_len.clone().read().unwrap().height;
 
-
-
                         match try_read_arraybuffer_as_vec(data, key) {
-
                             Ok(key_vec) => {
-
                                 // Use append-only store for historical queries in view functions
 
-                                let lookup = Self::get_value_at_height(context_get_len.clone(), &key_vec, height).await;
-
-
+                                let lookup = Self::get_value_at_height(
+                                    context_get_len.clone(),
+                                    &key_vec,
+                                    height,
+                                )
+                                .await;
 
                                 match lookup {
-
                                     Ok(value) => value.len() as i32,
 
                                     Err(_) => 0,
-
                                 }
-
                             }
 
                             Err(_) => i32::MAX,
-
                         }
-
                     })
-
                 },
-
             )
-
             .map_err(|e| anyhow!("Failed to wrap __get_len: {:?}", e))?;
 
-
-
         Ok(())
-
-    }    async fn new_with_db(
+    }
+    async fn new_with_db(
         db: T,
         height: u32,
         engine: wasmtime::Engine,
@@ -1635,16 +1737,21 @@ pub async fn setup_linker_view(
             wasmstore.limiter(|state| &mut state.limits)
         }
         {
-            Self::setup_linker(context.clone(), &mut linker).await
-                .map_err(|e| anyhow::anyhow!("{}", e)).context("Failed to setup basic linker")?;
-            Self::setup_linker_preview(context.clone(), &mut linker).await
-                .map_err(|e| anyhow::anyhow!("{}", e)).context("Failed to setup preview linker")?;
+            Self::setup_linker(context.clone(), &mut linker)
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e))
+                .context("Failed to setup basic linker")?;
+            Self::setup_linker_preview(context.clone(), &mut linker)
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e))
+                .context("Failed to setup preview linker")?;
             linker.define_unknown_imports_as_traps(&module)?;
         }
         let instance = linker
             .instantiate_async(&mut wasmstore, &module)
             .await
-            .map_err(|e| anyhow::anyhow!("{}", e)).context("Failed to instantiate WASM module")?;
+            .map_err(|e| anyhow::anyhow!("{}", e))
+            .context("Failed to instantiate WASM module")?;
         Ok(MetashrewRuntime {
             engine: engine.clone(),
             async_engine: engine,
@@ -1652,7 +1759,10 @@ pub async fn setup_linker_view(
             async_module: module.clone(),
             linker,
             context,
-            instance: Mutex::new(WasmInstance { store: wasmstore, instance }),
+            instance: Mutex::new(WasmInstance {
+                store: wasmstore,
+                instance,
+            }),
         })
     }
 
@@ -1661,7 +1771,10 @@ pub async fn setup_linker_view(
         height: u32,
         engine: wasmtime::Engine,
         module: wasmtime::Module,
-    ) -> Result<MetashrewRuntime<T>> where <T as KeyValueStoreLike>::Batch: Send {
+    ) -> Result<MetashrewRuntime<T>>
+    where
+        <T as KeyValueStoreLike>::Batch: Send,
+    {
         let mut linker = Linker::<State>::new(&engine);
         let mut wasmstore = Store::<State>::new(&engine, State::new());
         let context = Arc::<RwLock<MetashrewRuntimeContext<T>>>::new(RwLock::<
@@ -1677,16 +1790,21 @@ pub async fn setup_linker_view(
             let _ = wasmstore.set_fuel(u64::MAX);
         }
         {
-            Self::setup_linker(context.clone(), &mut linker).await
-                .map_err(|e| anyhow::anyhow!("{}", e)).context("Failed to setup basic linker")?;
-            Self::setup_linker_indexer(context.clone(), &mut linker).await
-                .map_err(|e| anyhow::anyhow!("{}", e)).context("Failed to setup indexer linker")?;
+            Self::setup_linker(context.clone(), &mut linker)
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e))
+                .context("Failed to setup basic linker")?;
+            Self::setup_linker_indexer(context.clone(), &mut linker)
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e))
+                .context("Failed to setup indexer linker")?;
             linker.define_unknown_imports_as_traps(&module)?;
         }
         let instance = linker
             .instantiate_async(&mut wasmstore, &module)
             .await
-            .map_err(|e| anyhow::anyhow!("{}", e)).context("Failed to instantiate WASM module")?;
+            .map_err(|e| anyhow::anyhow!("{}", e))
+            .context("Failed to instantiate WASM module")?;
         Ok(MetashrewRuntime {
             engine: engine.clone(),
             async_engine: engine,
@@ -1694,7 +1812,10 @@ pub async fn setup_linker_view(
             async_module: module.clone(),
             linker,
             context,
-            instance: Mutex::new(WasmInstance { store: wasmstore, instance }),
+            instance: Mutex::new(WasmInstance {
+                store: wasmstore,
+                instance,
+            }),
         })
     }
 
@@ -1737,19 +1858,34 @@ pub async fn setup_linker_view(
             MetashrewRuntimeContext::new(db, height, vec![]),
         ));
         {
-            wasmstore.limiter(|state| &mut state.limits)
+            wasmstore.limiter(|state| &mut state.limits);
+            // The view engine meters fuel, and since wasmtime 49 instantiation
+            // itself consumes fuel (constant expressions such as data-segment
+            // offsets and global initialisers, and the start-function call, are
+            // charged). A fresh store has 0 fuel, so without this every view
+            // trapped with "all fuel consumed" while instantiating; under
+            // wasmtime 43 instantiation was free. The caller resets fuel to
+            // u64::MAX before running the view function, so the fuel the view
+            // itself gets is unchanged. `let _`: an engine without fuel
+            // enabled rejects set_fuel, and then needs none.
+            let _ = wasmstore.set_fuel(u64::MAX);
         }
         {
-            Self::setup_linker(context.clone(), &mut linker).await
-                .map_err(|e| anyhow::anyhow!("{}", e)).context("Failed to setup basic linker")?;
-            Self::setup_linker_view(context.clone(), &mut linker).await
-                .map_err(|e| anyhow::anyhow!("{}", e)).context("Failed to setup view linker")?;
+            Self::setup_linker(context.clone(), &mut linker)
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e))
+                .context("Failed to setup basic linker")?;
+            Self::setup_linker_view(context.clone(), &mut linker)
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e))
+                .context("Failed to setup view linker")?;
             linker.define_unknown_imports_as_traps(&module)?;
         }
         let instance = linker
             .instantiate_async(&mut wasmstore, &module)
             .await
-            .map_err(|e| anyhow::anyhow!("{}", e)).context("Failed to instantiate WASM module")?;
+            .map_err(|e| anyhow::anyhow!("{}", e))
+            .context("Failed to instantiate WASM module")?;
         Ok(MetashrewRuntime {
             engine: engine.clone(),
             async_engine: engine,
@@ -1757,7 +1893,10 @@ pub async fn setup_linker_view(
             async_module: module.clone(),
             linker,
             context,
-            instance: Mutex::new(WasmInstance { store: wasmstore, instance }),
+            instance: Mutex::new(WasmInstance {
+                store: wasmstore,
+                instance,
+            }),
         })
     }
 
@@ -1769,50 +1908,33 @@ pub async fn setup_linker_view(
         let context_get = context.clone();
         let context_get_len = context.clone();
 
-                linker
+        linker
+            .func_wrap_async(
+                "env",
+                "__flush",
+                move |mut caller: Caller<'_, State>, (encoded,): (i32,)| {
+                    let context_ref = context_ref.clone();
 
-                    .func_wrap_async(
+                    Box::new(async move {
+                        let height = context_ref.clone().read().unwrap().height;
 
-                        "env",
+                        let mem = match caller.get_export("memory") {
+                            Some(export) => match export.into_memory() {
+                                Some(memory) => memory,
 
-                        "__flush",
+                                None => {
+                                    caller.data_mut().had_failure = true;
 
-                        move |mut caller: Caller<'_, State>, (encoded,): (i32,)| {
-                            let context_ref = context_ref.clone();
+                                    return;
+                                }
+                            },
 
-                            Box::new(async move {
+                            None => {
+                                caller.data_mut().had_failure = true;
 
-                                let height = context_ref.clone().read().unwrap().height;
-
-        
-
-        
-
-                                let mem = match caller.get_export("memory") {
-
-                                    Some(export) => match export.into_memory() {
-
-                                        Some(memory) => memory,
-
-                                        None => {
-
-                                            caller.data_mut().had_failure = true;
-
-                                            return;
-
-                                        }
-
-                                    },
-
-                                    None => {
-
-                                        caller.data_mut().had_failure = true;
-
-                                        return;
-
-                                    }
-
-                                };
+                                return;
+                            }
+                        };
 
                         let data = mem.data(&caller);
                         let encoded_vec = match try_read_arraybuffer_as_vec(data, encoded) {
@@ -1834,20 +1956,26 @@ pub async fn setup_linker_view(
 
                         let binding = context_ref.clone();
                         // Set state atomically before acquiring write lock
-                        binding.read().unwrap().state.store(1, std::sync::atomic::Ordering::SeqCst);
+                        binding
+                            .read()
+                            .unwrap()
+                            .state
+                            .store(1, std::sync::atomic::Ordering::SeqCst);
                         let mut ctx = binding.write().unwrap();
 
                         // Use append-only store for preview operations with batching
                         let mut batch = ctx.db.create_batch();
                         let smt_helper = crate::smt::SMTHelper::new(ctx.db.clone());
-                        
+
                         // Write all operations to a single batch for atomicity
                         for (k, v) in decoded.list.iter().tuples() {
                             let k_owned = <Vec<u8> as Clone>::clone(k);
                             let v_owned = <Vec<u8> as Clone>::clone(v);
 
                             // Add to batch using append-only logic
-                            if let Err(_) = smt_helper.put_to_batch(&mut batch, &k_owned, &v_owned, height) {
+                            if let Err(_) =
+                                smt_helper.put_to_batch(&mut batch, &k_owned, &v_owned, height)
+                            {
                                 caller.data_mut().had_failure = true;
                                 return;
                             }
@@ -1863,7 +1991,7 @@ pub async fn setup_linker_view(
             )
             .map_err(|e| anyhow!("Failed to wrap __flush: {:?}", e))?;
 
-                                        linker
+        linker
                                             .func_wrap_async(
                                                 "env",
                                                 "__get",
@@ -1927,20 +2055,25 @@ pub async fn setup_linker_view(
                 move |mut caller: Caller<'_, State>, (key,): (i32,)| {
                     let context_get_len = context_get_len.clone();
                     Box::new(async move {
-                    let mem = match caller.get_export("memory") {
-                        Some(export) => match export.into_memory() {
-                            Some(memory) => memory,
+                        let mem = match caller.get_export("memory") {
+                            Some(export) => match export.into_memory() {
+                                Some(memory) => memory,
+                                None => return i32::MAX,
+                            },
                             None => return i32::MAX,
-                        },
-                        None => return i32::MAX,
-                    };
-                    let data = mem.data(&caller);
+                        };
+                        let data = mem.data(&caller);
                         let height = context_get_len.clone().read().unwrap().height;
 
                         match try_read_arraybuffer_as_vec(data, key) {
                             Ok(key_vec) => {
                                 // Use append-only store for historical queries in view functions
-                                let lookup = Self::get_value_at_height(context_get_len.clone(), &key_vec, height).await;
+                                let lookup = Self::get_value_at_height(
+                                    context_get_len.clone(),
+                                    &key_vec,
+                                    height,
+                                )
+                                .await;
 
                                 match lookup {
                                     Ok(value) => value.len() as i32,
@@ -1960,7 +2093,10 @@ pub async fn setup_linker_view(
     pub async fn setup_linker_indexer(
         context: Arc<RwLock<MetashrewRuntimeContext<T>>>,
         linker: &mut Linker<State>,
-    ) -> Result<()> where <T as KeyValueStoreLike>::Batch: Send {
+    ) -> Result<()>
+    where
+        <T as KeyValueStoreLike>::Batch: Send,
+    {
         let context_ref = context.clone();
         let context_get = context.clone();
         let context_get_len = context.clone();
@@ -2050,7 +2186,8 @@ pub async fn setup_linker_view(
                                 log::error!(
                                     "flush batch build failed at height {}: {:?} \
                                      (block NOT committed, indexer will retry on next pass)",
-                                    height, e
+                                    height,
+                                    e
                                 );
                                 *caller.data_mut().last_flush_error.lock().unwrap() =
                                     Some(format!("{:?}", e));
@@ -2065,13 +2202,14 @@ pub async fn setup_linker_view(
                             &key_values,
                             &block_hash,
                         ) {
-                            Ok(_) => {},
+                            Ok(_) => {}
                             Err(e) => {
                                 log::error!(
                                     "flush atomic write failed at height {}: {:?} \
                                      (likely ENOSPC or I/O error — block NOT committed, \
                                      indexer will retry on next pass)",
-                                    height, e
+                                    height,
+                                    e
                                 );
                                 *caller.data_mut().last_flush_error.lock().unwrap() =
                                     Some(format!("{:?}", e));
@@ -2082,8 +2220,11 @@ pub async fn setup_linker_view(
                     }
 
                     // Set completion state
-                    context_ref.read().unwrap()
-                        .state.store(1, std::sync::atomic::Ordering::SeqCst);
+                    context_ref
+                        .read()
+                        .unwrap()
+                        .state
+                        .store(1, std::sync::atomic::Ordering::SeqCst);
                 },
             )
             .map_err(|e| anyhow!("Failed to wrap __flush: {:?}", e))?;
@@ -2123,7 +2264,9 @@ pub async fn setup_linker_view(
                                 match smt_helper.get_at_height(&key_vec, target_height) {
                                     Ok(Some(v)) => Ok(v),
                                     Ok(None) => Ok(Vec::new()),
-                                    Err(e) => Err(anyhow::anyhow!("Append-only query error: {}", e)),
+                                    Err(e) => {
+                                        Err(anyhow::anyhow!("Append-only query error: {}", e))
+                                    }
                                 }
                             };
 
@@ -2336,7 +2479,8 @@ pub async fn setup_linker_view(
             *store.data().last_flush_error.lock().unwrap() = None;
             let start = instance
                 .get_typed_func::<(), ()>(&mut *store, "_start")
-                .map_err(|e| anyhow::anyhow!("{}", e)).context("Failed to get _start function")?;
+                .map_err(|e| anyhow::anyhow!("{}", e))
+                .context("Failed to get _start function")?;
 
             // Use call_async since we're using an async store
             match start.call_async(&mut *store, ()).await {
@@ -2361,7 +2505,8 @@ pub async fn setup_linker_view(
                         Ok(())
                     }
                 }
-                Err(e) => Err(anyhow::anyhow!("{}", e)).context("Error calling _start function in atomic processing"),
+                Err(e) => Err(anyhow::anyhow!("{}", e))
+                    .context("Error calling _start function in atomic processing"),
             }
         };
 
@@ -2395,7 +2540,10 @@ pub async fn setup_linker_view(
                 *pending_slot.lock().unwrap() = None;
                 // ALWAYS refresh memory even on execution failure for deterministic behavior
                 if let Err(refresh_err) = self.refresh_memory().await {
-                    log::error!("Failed to refresh memory after failed atomic block execution: {}", refresh_err);
+                    log::error!(
+                        "Failed to refresh memory after failed atomic block execution: {}",
+                        refresh_err
+                    );
                 }
                 return Err(e);
             }
@@ -2404,12 +2552,17 @@ pub async fn setup_linker_view(
         // ALWAYS refresh memory after block execution for deterministic behavior
         // This ensures no WASM state persists between blocks
         if let Err(refresh_err) = self.refresh_memory().await {
-            log::error!("Failed to refresh memory after atomic block execution: {}", refresh_err);
+            log::error!(
+                "Failed to refresh memory after atomic block execution: {}",
+                refresh_err
+            );
             // Return the refresh error as it's critical for deterministic execution
             return Err(refresh_err).context("Memory refresh failed after atomic block execution");
         }
 
-        log::debug!("Memory refreshed after atomic block execution for deterministic state isolation");
+        log::debug!(
+            "Memory refreshed after atomic block execution for deterministic state isolation"
+        );
 
         // Return the atomic result
         Ok(crate::traits::AtomicBlockResult {

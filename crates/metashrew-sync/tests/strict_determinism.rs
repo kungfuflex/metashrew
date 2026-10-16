@@ -126,7 +126,9 @@ impl StorageAdapter for FaultyStorage {
         }
         // Delegate to the in-memory atomic commit — same strict-in-order
         // semantics the production RocksDB adapter has.
-        self.inner.commit_atomic(height, block_hash, state_root, _batch_data).await
+        self.inner
+            .commit_atomic(height, block_hash, state_root, _batch_data)
+            .await
     }
 }
 
@@ -144,7 +146,10 @@ async fn retry_commit<S: StorageAdapter + ?Sized>(
 ) -> Result<u32, SyncError> {
     let mut last_err: Option<SyncError> = None;
     for attempt in 1..=max_retries {
-        match storage.commit_atomic(height, block_hash, state_root, &[]).await {
+        match storage
+            .commit_atomic(height, block_hash, state_root, &[])
+            .await
+        {
             Ok(()) => return Ok(attempt),
             Err(e) => {
                 last_err = Some(e);
@@ -179,7 +184,10 @@ async fn retry_commit_forever<S: StorageAdapter + ?Sized>(
                 tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
             }
         }
-        match storage.commit_atomic(height, block_hash, state_root, &[]).await {
+        match storage
+            .commit_atomic(height, block_hash, state_root, &[])
+            .await
+        {
             Ok(()) => return attempt,
             Err(_e) => {
                 // Tight loop when backoff is disabled — we're testing
@@ -410,8 +418,14 @@ async fn rejected_commit_leaves_no_partial_writes() {
         .unwrap();
 
     assert_eq!(storage.get_indexed_height().await.unwrap(), 101);
-    assert_eq!(storage.get_block_hash(100).await.unwrap(), Some(vec![1u8; 32]));
-    assert_eq!(storage.get_block_hash(101).await.unwrap(), Some(vec![3u8; 32]));
+    assert_eq!(
+        storage.get_block_hash(100).await.unwrap(),
+        Some(vec![1u8; 32])
+    );
+    assert_eq!(
+        storage.get_block_hash(101).await.unwrap(),
+        Some(vec![3u8; 32])
+    );
     for bad_h in [99u32, 102, 105, 200] {
         assert!(
             storage.get_block_hash(bad_h).await.unwrap().is_none(),
@@ -470,7 +484,10 @@ async fn production_retry_loop_eventually_succeeds_after_20_failures() {
 
     // Baseline: zero faults, single attempt.
     let mut baseline = MockStorage::new();
-    baseline.commit_atomic(HEIGHT, &block_hash, &state_root, &[]).await.unwrap();
+    baseline
+        .commit_atomic(HEIGHT, &block_hash, &state_root, &[])
+        .await
+        .unwrap();
 
     // Faulty: 20 injected failures before the commit succeeds.
     let mut faulty = FaultyStorage::new(20);
@@ -485,7 +502,11 @@ async fn production_retry_loop_eventually_succeeds_after_20_failures() {
 
     // Attempt 21 = 1 success after 20 injected failures.
     assert_eq!(attempts, 21, "must have taken exactly 21 attempts");
-    assert_eq!(faulty.attempts().await, 21, "every attempt reaches commit_atomic");
+    assert_eq!(
+        faulty.attempts().await,
+        21,
+        "every attempt reaches commit_atomic"
+    );
 
     // Bit-for-bit comparison vs. baseline.
     assert_eq!(
@@ -575,20 +596,14 @@ async fn production_retry_loop_full_backoff_schedule() {
 
     let mut faulty = FaultyStorage::new(11);
     let t0 = Instant::now();
-    let attempts = retry_commit_forever(
-        &mut faulty,
-        HEIGHT,
-        &block_hash,
-        &state_root,
-        true,
-    )
-    .await;
+    let attempts = retry_commit_forever(&mut faulty, HEIGHT, &block_hash, &state_root, true).await;
     let elapsed = t0.elapsed();
 
     assert_eq!(attempts, 12);
 
     // Sum of sleeps for attempts 2..=12 with the documented schedule.
-    let expected_min_ms: u64 = 100 + 200 + 400 + 800 + 1600 + 3200 + 6400 + 12800 + 25600 + 30000 + 30000;
+    let expected_min_ms: u64 =
+        100 + 200 + 400 + 800 + 1600 + 3200 + 6400 + 12800 + 25600 + 30000 + 30000;
     // = 111_100
     let expected_max_ms: u64 = expected_min_ms + 5_000;
 

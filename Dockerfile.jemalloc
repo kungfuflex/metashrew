@@ -9,9 +9,9 @@
 #     `unprefixed_malloc_on_supported_platforms`
 #   * crates/rockshrew-mono/src/main.rs — #[global_allocator]
 #
-# Toolchain (rust:1.90-bookworm) and runtime base (debian:bookworm-slim) are
-# kept identical to docker/metashrew/Dockerfile.mainnet-v905rc13-fetcherfix-*
-# in ~/subkube so the image differs in the allocator and nothing else.
+# Toolchain: rust-toolchain.toml pins 1.99.0 and the builder image ships it;
+# the build is `--locked`. (Until v9.1.0-rc.1 this used rust:1.90-bookworm,
+# and rustup silently pulled whatever `stable` was via rust-toolchain.toml.)
 #
 # NOTE: no indexer.wasm is baked in. alspo-aio stages its own wasm via an
 # initContainer and passes `--indexer /wasm/indexer.wasm`, so a baked wasm is
@@ -22,7 +22,7 @@
 #   docker build -t registry.subfrost.io/subkube/metashrew:v9.0.5-rc.14-jemalloc \
 #                -f Dockerfile.jemalloc .
 
-FROM rust:1.90-bookworm AS builder
+FROM rust:1.99.0-bookworm@sha256:114c7a4425406451c2866b6aafe69fe29b1b298832db1277d411ac73c82d04d6 AS builder
 
 RUN apt-get update && apt-get install -y \
     build-essential \
@@ -43,9 +43,9 @@ COPY . .
 # full stats_print counters are available. Default (empty) is the lean image.
 ARG CARGO_FEATURES=""
 RUN if [ -n "$CARGO_FEATURES" ]; then \
-        cargo build --release -p rockshrew-mono --bin rockshrew-mono --features "$CARGO_FEATURES"; \
+        cargo build --release --locked -p rockshrew-mono --bin rockshrew-mono --features "$CARGO_FEATURES"; \
     else \
-        cargo build --release -p rockshrew-mono --bin rockshrew-mono; \
+        cargo build --release --locked -p rockshrew-mono --bin rockshrew-mono; \
     fi
 
 # Fail the build if jemalloc did not actually land in the binary. Without
@@ -58,7 +58,7 @@ RUN set -eux; \
     echo "jemalloc verified: unprefixed malloc exported"
 
 # === Runtime stage ===
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587
 
 RUN apt-get update && apt-get install -y \
     libssl3 \

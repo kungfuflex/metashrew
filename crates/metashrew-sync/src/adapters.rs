@@ -140,11 +140,12 @@ where
             context.height = height;
             context.db.set_height(height);
         }
-        
+
         // Execute block processing
-        self.runtime.run().await.map_err(|e| {
-            SyncError::Runtime(format!("Runtime execution failed: {}", e))
-        })?;
+        self.runtime
+            .run()
+            .await
+            .map_err(|e| SyncError::Runtime(format!("Runtime execution failed: {}", e)))?;
         Ok(())
     }
 
@@ -155,15 +156,17 @@ where
         block_hash: &[u8],
     ) -> SyncResult<AtomicBlockResult> {
         // Process block atomically - no external lock needed
-        match self.runtime.process_block_atomic(height, block_data, block_hash).await {
-            Ok(result) => {
-                Ok(AtomicBlockResult {
-                    state_root: result.state_root,
-                    batch_data: result.batch_data,
-                    height: result.height,
-                    block_hash: result.block_hash,
-                })
-            }
+        match self
+            .runtime
+            .process_block_atomic(height, block_data, block_hash)
+            .await
+        {
+            Ok(result) => Ok(AtomicBlockResult {
+                state_root: result.state_root,
+                batch_data: result.batch_data,
+                height: result.height,
+                block_hash: result.block_hash,
+            }),
             Err(e) => Err(SyncError::Runtime(format!(
                 "Atomic block processing failed: {}",
                 e
@@ -175,18 +178,20 @@ where
         // view() creates a completely independent WASM runtime instance
         // No external locking needed - the method handles internal coordination
         // Database reads are safe due to append-only structure and height-based queries
-        let result = self.runtime
+        let result = self
+            .runtime
             .view(call.function_name, &call.input_data, call.height)
             .await
             .map_err(|e| SyncError::ViewFunction(format!("View function failed: {}", e)))?;
-        
+
         Ok(ViewResult { data: result })
     }
 
     async fn execute_preview(&self, call: PreviewCall) -> SyncResult<ViewResult> {
         // preview() creates an isolated DB copy, processes the block, then runs a view function
         // No external locking needed - all isolation is handled internally
-        let result = self.runtime
+        let result = self
+            .runtime
             .preview_async(
                 &call.block_data,
                 call.function_name,
@@ -195,15 +200,17 @@ where
             )
             .await
             .map_err(|e| SyncError::ViewFunction(format!("Preview function failed: {}", e)))?;
-        
+
         Ok(ViewResult { data: result })
     }
 
     async fn get_state_root(&self, height: u32) -> SyncResult<Vec<u8>> {
-        self.runtime
-            .get_state_root(height)
-            .await
-            .map_err(|e| SyncError::Runtime(format!("Failed to get state root for height {}: {}", height, e)))
+        self.runtime.get_state_root(height).await.map_err(|e| {
+            SyncError::Runtime(format!(
+                "Failed to get state root for height {}: {}",
+                height, e
+            ))
+        })
     }
 
     async fn refresh_memory(&self) -> SyncResult<()> {

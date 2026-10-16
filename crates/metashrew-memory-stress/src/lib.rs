@@ -24,8 +24,10 @@ impl MemoryConfig {
     fn from_input(input: Vec<u8>) -> Self {
         let mut cursor = Cursor::new(input);
         let height = metashrew_support::utils::consume_sized_int::<u32>(&mut cursor).unwrap_or(0);
-        let allocation_size_mb = metashrew_support::utils::consume_sized_int::<u32>(&mut cursor).unwrap_or(100);
-        let num_allocations = metashrew_support::utils::consume_sized_int::<u32>(&mut cursor).unwrap_or(10);
+        let allocation_size_mb =
+            metashrew_support::utils::consume_sized_int::<u32>(&mut cursor).unwrap_or(100);
+        let num_allocations =
+            metashrew_support::utils::consume_sized_int::<u32>(&mut cursor).unwrap_or(10);
 
         Self {
             height,
@@ -57,9 +59,8 @@ pub fn _start() {
     let result = attempt_memory_stress(&config);
 
     // Store result
-    let mut result_pointer = IndexPointer::from_keyword(
-        &format!("/memory-stress-result/{}", config.height)
-    );
+    let mut result_pointer =
+        IndexPointer::from_keyword(&format!("/memory-stress-result/{}", config.height));
 
     match result {
         Ok(total_allocated) => {

@@ -3,7 +3,6 @@
 //! This example is for demonstration purposes only and is not meant to be run.
 //! It shows the syntax and structure of using the macro to define an indexer.
 
-
 // In a real implementation, you would define your indexer struct
 // and implement the necessary methods.
 struct ExampleIndexer;

@@ -4,8 +4,18 @@ use std::process::Command;
 fn main() {
     let out_dir = env::var("OUT_DIR").unwrap();
 
-    // Build the metashrew-minimal WASM
+    // Build the metashrew-minimal WASM.
+    //
+    // The nested cargo must not inherit the host build's flags: cargo sets
+    // CARGO_ENCODED_RUSTFLAGS for build scripts, and tools like
+    // cargo-llvm-cov put `-C instrument-coverage` there, which cannot link
+    // for wasm32-unknown-unknown (no profiler runtime).
     let status = Command::new("cargo")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_BUILD_RUSTFLAGS")
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("RUSTC_WORKSPACE_WRAPPER")
         .arg("build")
         .arg("--release")
         .arg("--target=wasm32-unknown-unknown")

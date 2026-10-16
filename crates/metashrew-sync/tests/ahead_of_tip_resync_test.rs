@@ -166,7 +166,12 @@ async fn resync_rewinds_cursor_ahead_of_disk_without_a_reorg() {
     assert_eq!(sync.current_height(), 101);
 
     // Disk falls behind the cursor: tip 96, cursor still 101.
-    sync.storage().write().await.rollback_to_height(96).await.unwrap();
+    sync.storage()
+        .write()
+        .await
+        .rollback_to_height(96)
+        .await
+        .unwrap();
 
     // Pre-rc.16 recovery: no rewind.
     let via_handle_reorg = metashrew_sync::sync::handle_reorg(
@@ -185,7 +190,11 @@ async fn resync_rewinds_cursor_ahead_of_disk_without_a_reorg() {
 
     let next = sync.resync_cursor_to_storage_tip().await.unwrap();
     assert_eq!(next, 97, "resync must anchor at on-disk tip + 1");
-    assert_eq!(sync.current_height(), 97, "resync must store the rewound cursor");
+    assert_eq!(
+        sync.current_height(),
+        97,
+        "resync must store the rewound cursor"
+    );
 }
 
 /// A real reorg below the on-disk tip: resync still rolls back to the
@@ -210,5 +219,9 @@ async fn resync_still_rolls_back_a_real_reorg_below_the_tip() {
     let next = sync.resync_cursor_to_storage_tip().await.unwrap();
     assert_eq!(next, 99, "common ancestor is 98, so resume at 99");
     assert_eq!(sync.current_height(), 99);
-    assert_eq!(sync.get_height().await.unwrap(), 98, "storage rolled back to ancestor");
+    assert_eq!(
+        sync.get_height().await.unwrap(),
+        98,
+        "storage rolled back to ancestor"
+    );
 }

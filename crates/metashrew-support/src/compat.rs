@@ -85,7 +85,7 @@ pub fn to_ptr(v: &mut Vec<u8>) -> i32 {
 /// When data is stored in ArrayBuffer layout:
 /// - Bytes 0-3: Length as little-endian u32
 /// - Bytes 4+: Actual data payload
-/// 
+///
 /// This function returns a pointer to the data payload, skipping the length.
 pub fn to_passback_ptr(v: &mut Vec<u8>) -> i32 {
     to_ptr(v) + 4

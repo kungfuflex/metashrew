@@ -78,7 +78,12 @@ impl ValidationRequest {
             None
         };
 
-        Some(ValidationRequest { height, header, claimed_hash, prev_hash })
+        Some(ValidationRequest {
+            height,
+            header,
+            claimed_hash,
+            prev_hash,
+        })
     }
 }
 
@@ -93,11 +98,17 @@ pub struct Verdict {
 
 impl Verdict {
     pub fn accept() -> Self {
-        Verdict { accepted: true, reason: String::new() }
+        Verdict {
+            accepted: true,
+            reason: String::new(),
+        }
     }
 
     pub fn reject(reason: impl Into<String>) -> Self {
-        Verdict { accepted: false, reason: reason.into() }
+        Verdict {
+            accepted: false,
+            reason: reason.into(),
+        }
     }
 
     /// `version:u8 | accepted:u8 | reason_len:u32 LE | reason`
@@ -142,19 +153,29 @@ mod tests {
         let r = sample();
         assert_eq!(ValidationRequest::decode(&r.encode()), Some(r.clone()));
 
-        let genesis = ValidationRequest { height: 0, prev_hash: None, ..r };
+        let genesis = ValidationRequest {
+            height: 0,
+            prev_hash: None,
+            ..r
+        };
         assert_eq!(ValidationRequest::decode(&genesis.encode()), Some(genesis));
     }
 
     #[test]
     fn request_round_trips_an_oversized_auxpow_header() {
-        let r = ValidationRequest { header: vec![0x5a; 1024], ..sample() };
+        let r = ValidationRequest {
+            header: vec![0x5a; 1024],
+            ..sample()
+        };
         assert_eq!(ValidationRequest::decode(&r.encode()), Some(r));
     }
 
     #[test]
     fn verdict_round_trips() {
-        assert_eq!(Verdict::decode(&Verdict::accept().encode()), Some(Verdict::accept()));
+        assert_eq!(
+            Verdict::decode(&Verdict::accept().encode()),
+            Some(Verdict::accept())
+        );
         let r = Verdict::reject("block 7 does not meet its own stated difficulty");
         assert_eq!(Verdict::decode(&r.encode()), Some(r));
     }
@@ -166,8 +187,7 @@ mod tests {
         let good = sample().encode();
         for cut in 0..good.len() {
             assert!(
-                ValidationRequest::decode(&good[..cut]).is_none()
-                    || cut == good.len(),
+                ValidationRequest::decode(&good[..cut]).is_none() || cut == good.len(),
                 "prefix of length {cut} decoded"
             );
         }
@@ -177,7 +197,10 @@ mod tests {
         assert_eq!(ValidationRequest::decode(&hostile), None);
 
         assert_eq!(Verdict::decode(&[]), None);
-        assert_eq!(Verdict::decode(&[WIRE_VERSION, 1, 0xff, 0xff, 0xff, 0xff]), None);
+        assert_eq!(
+            Verdict::decode(&[WIRE_VERSION, 1, 0xff, 0xff, 0xff, 0xff]),
+            None
+        );
     }
 
     #[test]

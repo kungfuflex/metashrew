@@ -1,9 +1,7 @@
 //! RocksDB implementation of KeyValueStoreLike trait
 
 use anyhow::Result;
-use metashrew_runtime::{
-    BatchLike, KVTrackerFn, KeyValueStoreLike, TIP_HEIGHT_KEY,
-};
+use metashrew_runtime::{BatchLike, KVTrackerFn, KeyValueStoreLike, TIP_HEIGHT_KEY};
 use rocksdb::{Options, WriteBatch, WriteBatchIterator, WriteOptions, DB};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
@@ -267,7 +265,9 @@ impl KeyValueStoreLike for RocksDBRuntimeAdapter {
 
     fn write(&mut self, batch: RocksDBBatch) -> Result<(), Self::Error> {
         if let Some(shadow) = self.write_shadow.clone() {
-            let mut applier = ShadowApplier { shadow: shadow.write().unwrap() };
+            let mut applier = ShadowApplier {
+                shadow: shadow.write().unwrap(),
+            };
             batch.0.iterate(&mut applier);
             return Ok(());
         }
@@ -395,26 +395,24 @@ impl KeyValueStoreLike for RocksDBRuntimeAdapter {
 
     fn keys<'a>(&'a self) -> Result<Box<dyn Iterator<Item = Vec<u8>> + 'a>, Self::Error> {
         let iter = self.db.iterator(rocksdb::IteratorMode::Start);
-        let db_keys: Box<dyn Iterator<Item = Vec<u8>> + 'a> = Box::new(iter.filter_map(|item| match item {
-            Ok((key, _)) => Some(key.to_vec()),
-            Err(e) => {
-                log::error!("RocksDB iteration error in keys(): {}", e);
-                None
-            }
-        }));
+        let db_keys: Box<dyn Iterator<Item = Vec<u8>> + 'a> =
+            Box::new(iter.filter_map(|item| match item {
+                Ok((key, _)) => Some(key.to_vec()),
+                Err(e) => {
+                    log::error!("RocksDB iteration error in keys(): {}", e);
+                    None
+                }
+            }));
 
         if let Some(shadow) = &self.write_shadow {
             // Snapshot the overlay so the iterator doesn't hold the lock.
-            let snapshot: HashMap<Vec<u8>, Option<Vec<u8>>> =
-                shadow.read().unwrap().clone();
-            let merged = db_keys
-                .filter(move |k| !snapshot.contains_key(k))
-                .chain({
-                    let snap2 = shadow.read().unwrap().clone();
-                    snap2
-                        .into_iter()
-                        .filter_map(|(k, v)| if v.is_some() { Some(k) } else { None })
-                });
+            let snapshot: HashMap<Vec<u8>, Option<Vec<u8>>> = shadow.read().unwrap().clone();
+            let merged = db_keys.filter(move |k| !snapshot.contains_key(k)).chain({
+                let snap2 = shadow.read().unwrap().clone();
+                snap2
+                    .into_iter()
+                    .filter_map(|(k, v)| if v.is_some() { Some(k) } else { None })
+            });
             Ok(Box::new(merged))
         } else {
             Ok(db_keys)
@@ -451,7 +449,6 @@ impl KeyValueStoreLike for RocksDBRuntimeAdapter {
         }
     }
 }
-
 
 /// Query height from RocksDB
 pub async fn query_height(db: Arc<DB>, start_block: u32) -> Result<u32> {

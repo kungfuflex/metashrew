@@ -54,10 +54,9 @@ use tempfile::TempDir;
 #[test]
 fn create_isolated_copy_is_actually_isolated() {
     let dir = TempDir::new().expect("tempdir");
-    let mut original = RocksDBRuntimeAdapter::open_optimized(
-        dir.path().to_string_lossy().to_string(),
-    )
-    .expect("open RocksDBRuntimeAdapter");
+    let mut original =
+        RocksDBRuntimeAdapter::open_optimized(dir.path().to_string_lossy().to_string())
+            .expect("open RocksDBRuntimeAdapter");
 
     // Seed: original has key=A, value=1.
     KeyValueStoreLike::put(&mut original, b"A", b"1").expect("seed put");
@@ -72,8 +71,7 @@ fn create_isolated_copy_is_actually_isolated() {
 
     // Mutate via the preview handle. Per the trait contract this
     // must NOT touch the original DB.
-    KeyValueStoreLike::put(&mut preview, b"A", b"PREVIEW_MUTATION")
-        .expect("preview write");
+    KeyValueStoreLike::put(&mut preview, b"A", b"PREVIEW_MUTATION").expect("preview write");
 
     // The original must still report the seed value.
     let original_value =
@@ -102,10 +100,9 @@ fn create_isolated_copy_isolates_batch_writes() {
     use metashrew_runtime::traits::BatchLike;
 
     let dir = TempDir::new().expect("tempdir");
-    let mut original = RocksDBRuntimeAdapter::open_optimized(
-        dir.path().to_string_lossy().to_string(),
-    )
-    .expect("open RocksDBRuntimeAdapter");
+    let mut original =
+        RocksDBRuntimeAdapter::open_optimized(dir.path().to_string_lossy().to_string())
+            .expect("open RocksDBRuntimeAdapter");
 
     // Seed the dedup-style key alkane contracts use.
     let seen_key = b"/seen/abcdef".to_vec();
@@ -117,8 +114,7 @@ fn create_isolated_copy_isolates_batch_writes() {
     // handle and commit it.
     let mut batch = preview.create_batch();
     batch.put(&seen_key, b"PREVIEW_DEDUP_VALUE");
-    KeyValueStoreLike::write(&mut preview, batch)
-        .expect("preview batch write");
+    KeyValueStoreLike::write(&mut preview, batch).expect("preview batch write");
 
     let after = KeyValueStoreLike::get(&mut original, &seen_key)
         .expect("read original after preview batch");

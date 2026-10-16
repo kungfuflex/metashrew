@@ -62,10 +62,8 @@ fn write_outpoint(txid: &bitcoin::Txid, vout: u32, value: &[u8]) {
 
 #[cfg(target_arch = "wasm32")]
 fn write_trace(txid: &bitcoin::Txid, trace: &[u8]) {
-    let mut pointer = IndexPointer::from_keyword(&format!(
-        "/trace/{}",
-        hex::encode(txid.as_byte_array())
-    ));
+    let mut pointer =
+        IndexPointer::from_keyword(&format!("/trace/{}", hex::encode(txid.as_byte_array())));
     pointer.set(Arc::new(trace.to_vec()));
 }
 
