@@ -21,7 +21,7 @@ sha2 = "0.10"
 # Root package for running tests
 [package]
 name = "metashrew-tests"
-version = "9.1.0-rc.3"
+version = "9.1.0-rc.4"
 edition = "2021"
 
 [dependencies]
@@ -32,7 +32,7 @@ futures = "0.3.30"
 async-trait = "0.1"
 log = "0.4.22"
 env_logger = "0.11"
-wasmtime = "49.0.2"
+wasmtime = "49.0.3"
 
 # Metashrew dependencies
 metashrew-runtime = { path = "crates/metashrew-runtime" }

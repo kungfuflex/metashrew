@@ -1,13 +1,13 @@
 [package]
 name = "metashrew-runtime"
-version = "9.1.0-rc.3"
+version = "9.1.0-rc.4"
 edition = "2021"
 
 [dependencies]
 anyhow = "1.0.75"
 prost = "0.12.1"
 prost-build = "0.12.1"
-wasmtime = "49.0.2"
+wasmtime = "49.0.3"
 itertools = "0.12.0"
 log = "0.4.20"
 hex = "0.4.3"
