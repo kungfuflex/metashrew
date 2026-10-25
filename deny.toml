@@ -19,10 +19,18 @@ no-default-features = false
 # Every vulnerability, unsound, unmaintained and notice advisory fails
 # the job unless listed here with a reason.
 #
-# Ignore list: EMPTY. Nothing in the default-feature graph currently
-# needs an exception. Add entries only as
+# Add entries only as
 #   { id = "RUSTSEC-YYYY-NNNN", reason = "why it cannot be fixed, and why it is not reachable" },
-ignore = []
+#
+# The two wasmtime entries are closed by wasmtime 49.0.4. The indexer
+# runtime (wasmtime) changes only through its own reviewed runtime
+# upgrade, never inside a dependency-security release. Both are
+# unreachable in this tree, so they wait for that upgrade. Remove both
+# entries when wasmtime moves to >= 49.0.4.
+ignore = [
+    { id = "RUSTSEC-2026-0379", reason = "Cranelift aarch64 backend only; production rockshrew-mono is built and run on x86_64 only. Fixed by wasmtime 49.0.4 (next runtime upgrade)" },
+    { id = "RUSTSEC-2026-0378", reason = "component-model streams only; metashrew runs core wasm modules and never uses wasmtime::component. Fixed by wasmtime 49.0.4 (next runtime upgrade)" },
+]
 # A yanked crate in Cargo.lock is a warning, not a failure: yanks are
 # not security advisories and would otherwise break unrelated PRs.
 yanked = "warn"
@@ -42,6 +50,10 @@ deny = [
     { crate = "hyper@<=0.14.99", reason = "hyper 0.14 is what pulled in h2 0.3" },
     { crate = "actix-http@<=3.12.0", reason = "GHSA-xhj4-vrgc-hr34 (CL.TE request smuggling)" },
     { crate = "wasmtime@<=49.0.2", reason = "17 RustSec advisories closed by 48.0.4 / 49.0.2, then RUSTSEC-2026-0353..0364 (12) closed by 49.0.3" },
+    { crate = "rustls-webpki@<=0.103.15", reason = "RUSTSEC-2026-0382 / CVE-2026-111943 (distrusted intermediates accepted)" },
+    { crate = "rustls@<=0.23.45", reason = "RUSTSEC-2026-0346..0349" },
+    { crate = "webpki-roots@<=1.0.9", reason = "RUSTSEC-2026-0381 / CVE-2026-111943 (distrusted roots bundled); use >= 1.0.10" },
+    { crate = "tokio@<=1.51.5", reason = "RUSTSEC-2026-0386 (AsyncFd I/O safety), fixed in the 1.51 LTS at 1.51.6" },
     { crate = "russh", reason = "pre-auth advisories; allowed only behind the non-default ssh-tunnel feature" },
     { crate = "russh-keys", reason = "see russh" },
 ]
