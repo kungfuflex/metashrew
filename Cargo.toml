@@ -17,11 +17,24 @@ prost-build = "0.12.6"
 tokio = { version = "1.43.0", features = ["full"] }
 futures = "0.3.30"
 sha2 = "0.10"
+wasmtime = { version = "49.0.4", default-features = false, features = [
+    # wasmtime's default feature set minus `cache` (the on-disk compiled-module
+    # cache). metashrew never enables it (no `Config::cache` call, and it is
+    # off unless configured), and it is what pulls zstd 0.13 into the build
+    # (RUSTSEC-2026-0391/-0398/-0403/-0410). The runtime is otherwise built
+    # exactly as before; keep this list in step with wasmtime's `default` on
+    # every runtime upgrade.
+    "anyhow", "async", "backtrace", "gc", "gc-copying", "gc-drc", "gc-null",
+    "wat", "profiling", "parallel-compilation", "cranelift", "pooling-allocator",
+    "demangle", "addr2line", "coredump", "debug-builtins", "runtime",
+    "component-model", "component-model-async", "threads", "stack-switching",
+    "std", "debug", "compile-time-builtins", "wit-parser",
+] }
 
 # Root package for running tests
 [package]
 name = "metashrew-tests"
-version = "9.1.0-rc.5"
+version = "9.1.0-rc.6"
 edition = "2021"
 
 [dependencies]
@@ -32,7 +45,7 @@ futures = "0.3.30"
 async-trait = "0.1"
 log = "0.4.22"
 env_logger = "0.11"
-wasmtime = "49.0.3"
+wasmtime = { workspace = true }
 
 # Metashrew dependencies
 metashrew-runtime = { path = "crates/metashrew-runtime" }
@@ -50,7 +63,7 @@ sha2 = "0.10"
 # Serialization dependencies
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-zstd = "0.13"
+zstd = "0.14.3"
 
 # Bitcoin dependencies
 bitcoin = "0.32.6"
@@ -66,8 +79,12 @@ actix-web = { version = "4.9.0", default-features = false, features = [
     # Every actix-web default feature except `http2`: the server binds plain
     # HTTP/1.1 (`HttpServer::bind`), so h2c/ALPN is never negotiated, and
     # `http2` is what pulls h2 0.3 (RUSTSEC-2026-0258, no 0.3 fix) into the
-    # binary through actix-http.
-    "macros", "compress-brotli", "compress-gzip", "compress-zstd",
+    # binary through actix-http. Also without `compress-zstd`: no handler uses
+    # the Compress middleware, and with it actix-http decoded any request body
+    # sent with `Content-Encoding: zstd` through zstd 0.13's stream::write::Decoder
+    # (RUSTSEC-2026-0403). Such bodies now reach the handler undecoded and
+    # fail to parse.
+    "macros", "compress-brotli", "compress-gzip",
     "cookies", "unicode", "compat", "ws",
 ] }
 actix-cors = "0.7.0"
