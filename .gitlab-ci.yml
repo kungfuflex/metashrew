@@ -10,7 +10,7 @@
 # The token never reaches argv, a URL or the log: it sits in a tmpfs file read by a GIT_ASKPASS helper.
 # Branches that are not protected on sfsec (feature branches) are mirrored by the next run on the default branch
 # (push, or the hourly pipeline schedule).
-stages: [mirror]
+stages: [mirror, check]
 
 variables:
   MIRROR_GITHUB_REPO: kungfuflex/metashrew
@@ -90,3 +90,35 @@ mirror:github:dry-run:
       echo "would create or update:"; join -t $'\t' -1 2 -2 2 -v 1 -o 1.2 <(sort -t $'\t' -k2 "$T/sfsec") <(sort -t $'\t' -k2 "$T/github") | sed 's/^/  new  /' | head -50
       join -t $'\t' -1 2 -2 2 -o 1.2,1.1,2.1 <(sort -t $'\t' -k2 "$T/sfsec") <(sort -t $'\t' -k2 "$T/github") | awk -F'\t' '$2!=$3{print "  move "$1}' | head -50
       echo "only on GitHub (left alone, never deleted):"; join -t $'\t' -1 2 -2 2 -v 2 -o 2.2 <(sort -t $'\t' -k2 "$T/sfsec") <(sort -t $'\t' -k2 "$T/github") | sed 's/^/  /' | head -50
+
+# Dependency security gate (MRs, default-branch pushes, v* tags): the same `cargo deny` the GitHub
+# workflow runs (deny.toml = the policy: default features = the production rockshrew-mono graph),
+# plus a --locked release build of rockshrew-mono. Runs AFTER the mirror stage, so a red check never
+# holds the GitHub mirror back. bob/rust has no tlsfetch/gh and curl is not used (operator directive
+# 2026-10-25), so cargo-deny comes from crates.io via `cargo install --locked` (cargo verifies every
+# crate checksum). Toolchain: rust-toolchain.toml (1.99.0, in bob/rust).
+check:security-deps:
+  stage: check
+  tags: [bob]
+  image: bob/rust
+  interruptible: true
+  variables:
+    CARGO_TERM_COLOR: never
+    CARGO_DENY_VERSION: "0.20.2"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_COMMIT_TAG =~ /^v[0-9]/'
+  script:
+    - |
+      set -euo pipefail
+      cargo metadata --locked --format-version 1 > /dev/null
+      echo "Cargo.lock: consistent (--locked)"
+      D=$(mktemp -d)
+      cargo install --locked --quiet cargo-deny --version "$CARGO_DENY_VERSION" --root "$D"
+      export PATH="$D/bin:$PATH"
+      cargo deny --version
+      cargo deny --workspace --locked check advisories bans sources
+      cargo build --locked --release -p rockshrew-mono
+      ./target/release/rockshrew-mono --help > /dev/null
+      sha256sum target/release/rockshrew-mono
