@@ -22,15 +22,7 @@ no-default-features = false
 # Add entries only as
 #   { id = "RUSTSEC-YYYY-NNNN", reason = "why it cannot be fixed, and why it is not reachable" },
 #
-# The two wasmtime entries are closed by wasmtime 49.0.4. The indexer
-# runtime (wasmtime) changes only through its own reviewed runtime
-# upgrade, never inside a dependency-security release. Both are
-# unreachable in this tree, so they wait for that upgrade. Remove both
-# entries when wasmtime moves to >= 49.0.4.
-ignore = [
-    { id = "RUSTSEC-2026-0379", reason = "Cranelift aarch64 backend only; production rockshrew-mono is built and run on x86_64 only. Fixed by wasmtime 49.0.4 (next runtime upgrade)" },
-    { id = "RUSTSEC-2026-0378", reason = "component-model streams only; metashrew runs core wasm modules and never uses wasmtime::component. Fixed by wasmtime 49.0.4 (next runtime upgrade)" },
-]
+ignore = []
 # A yanked crate in Cargo.lock is a warning, not a failure: yanks are
 # not security advisories and would otherwise break unrelated PRs.
 yanked = "warn"
@@ -54,7 +46,7 @@ deny = [
     { name = "h2", version = "<=0.4.15", reason = "RUSTSEC-2026-0258 (unbounded empty DATA frames); h2 0.3 has no fix" },
     { name = "hyper", version = "<=0.14.99", reason = "hyper 0.14 is what pulled in h2 0.3" },
     { name = "actix-http", version = "<=3.12.0", reason = "GHSA-xhj4-vrgc-hr34 (CL.TE request smuggling)" },
-    { name = "wasmtime", version = "<=49.0.2", reason = "17 RustSec advisories closed by 48.0.4 / 49.0.2, then RUSTSEC-2026-0353..0364 (12) closed by 49.0.3" },
+    { name = "wasmtime", version = "<=49.0.3", reason = "17 RustSec advisories closed by 48.0.4 / 49.0.2, RUSTSEC-2026-0353..0364 (12) closed by 49.0.3, then RUSTSEC-2026-0378 / -0379 closed by 49.0.4" },
     { name = "rustls-webpki", version = "<=0.103.15", reason = "RUSTSEC-2026-0382 / CVE-2026-111943 (distrusted intermediates accepted)" },
     { name = "rustls", version = "<=0.23.45", reason = "RUSTSEC-2026-0346..0349" },
     { name = "webpki-roots", version = "<=1.0.9", reason = "RUSTSEC-2026-0381 / CVE-2026-111943 (distrusted roots bundled); use >= 1.0.10" },

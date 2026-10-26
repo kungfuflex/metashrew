@@ -17,7 +17,7 @@ prost-build = "0.12.6"
 tokio = { version = "1.43.0", features = ["full"] }
 futures = "0.3.30"
 sha2 = "0.10"
-wasmtime = { version = "49.0.3", default-features = false, features = [
+wasmtime = { version = "49.0.4", default-features = false, features = [
     # wasmtime's default feature set minus `cache` (the on-disk compiled-module
     # cache). metashrew never enables it (no `Config::cache` call, and it is
     # off unless configured), and it is what pulls zstd 0.13 into the build

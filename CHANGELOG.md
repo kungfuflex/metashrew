@@ -7,10 +7,19 @@ Release notes for older versions are on the GitHub releases page
 
 A dependency-only security release. It supersedes **v9.1.0-rc.5**: that tag was signed and
 pushed, but its tag pipeline failed `cargo deny` on four zstd advisories published after rc.5
-was reviewed, so rc.5 was never mirrored or released. Use rc.6. **The runtime is unchanged:**
-wasmtime stays at 49.0.3 and the indexing, storage and reorg code doesn't change. rc.4, rc.5 and
-rc.6 run the same indexer wasm the same way. It pairs with alkanes **v3.0.0-rc.4**, whose
-indexer wasm is byte-identical to rc.3.
+was reviewed, so rc.5 was never mirrored or released. Use rc.6. **wasmtime moves to the 49.0.4
+patch release** (below). The indexing, storage and reorg code doesn't change, and on x86_64
+rc.6 indexes the same blocks into the same state as rc.4 and rc.5. It pairs with alkanes
+**v3.0.0-rc.4**, whose indexer wasm is byte-identical to rc.3.
+
+- **wasmtime 49.0.3 → 49.0.4 (RUSTSEC-2026-0378, RUSTSEC-2026-0379).** 0379 is a Cranelift
+  bug on **aarch64**: a large wasm `br_table` could jump to the wrong target, so an indexer
+  built from rc.5 or earlier and run on ARM (Apple Silicon, Graviton, Ampere) could execute
+  the indexer wasm differently from an x86_64 one. Operators on aarch64 should upgrade.
+  0378 is a panic in component-model streams, which metashrew doesn't use (it runs core wasm
+  modules only). Only the wasmtime, Cranelift and Pulley crates change version (patch
+  bumps), and the enabled features are unchanged. Both `deny.toml` ignores are removed, and
+  the regression ban now rejects wasmtime <= 49.0.3.
 
 - **zstd (RUSTSEC-2026-0391, -0398, -0403, -0410).** `zstd` 0.13.3, `zstd-safe` 7.2.4 and
   `zstd-sys` 2.0.16 are affected, and the 0.13 line has no fix. They came in three ways:
@@ -23,7 +32,7 @@ indexer wasm is byte-identical to rc.3.
     parse. gzip and brotli request bodies still work. Responses are not compressed, as before.
   - **wasmtime `cache` (removed).** wasmtime's on-disk compiled-module cache, which metashrew
     never turns on (nothing calls `Config::cache`, and it is off unless configured). The
-    workspace now declares wasmtime 49.0.3 once, with its default features minus `cache`.
+    workspace now declares wasmtime once (49.0.4, see above), with its default features minus `cache`.
     The resolved wasmtime and Cranelift feature sets are otherwise identical to rc.5.
   - **`rockshrew-mono` snapshot compression** (`zstd::encode_all` / `decode_all`) moves to
     `zstd` 0.14.3 / `zstd-safe` 8.2.0 / `zstd-sys` 2.1.2. Those bulk calls weren't affected
@@ -39,7 +48,8 @@ indexer wasm is byte-identical to rc.3.
   against the rc.1 and rc.5 lockfiles, which they now reject (h2 0.3.27 and 0.4.13,
   actix-http 3.12.0, tokio 1.51.0, wasmtime 43.0.0, zstd 0.13.3 and its -safe/-sys pair).
 - **Release:** all crates 9.1.0-rc.5 → 9.1.0-rc.6. `Cargo.lock` updates the three zstd
-  crates. It removes `wasmtime-internal-cache` and the crates that only it or `zstd-sys`
+  crates and the wasmtime, Cranelift and Pulley crates (49.0.3 → 49.0.4, 0.136.3 → 0.136.4).
+  It removes `wasmtime-internal-cache` and the crates that only it or `zstd-sys`
   2.0's bindgen pulled in (`bindgen` 0.72, `directories-next`, `dirs-sys-next`, `toml` 1.1
   and its `toml_*`/`serde_spanned`/`winnow` 1.0 dependencies), plus the workspace versions.
 
