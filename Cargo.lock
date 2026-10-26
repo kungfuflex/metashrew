@@ -1645,7 +1645,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2216,7 +2216,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -2725,7 +2725,7 @@ dependencies = [
 
 [[package]]
 name = "memshrew-p2p"
-version = "9.1.0-rc.4"
+version = "9.1.0-rc.5"
 dependencies = [
  "actix-cors",
  "actix-web",
@@ -2746,7 +2746,7 @@ dependencies = [
 
 [[package]]
 name = "memshrew-runtime"
-version = "9.1.0-rc.4"
+version = "9.1.0-rc.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2758,7 +2758,7 @@ dependencies = [
 
 [[package]]
 name = "metashrew-core"
-version = "9.1.0-rc.4"
+version = "9.1.0-rc.5"
 dependencies = [
  "anyhow",
  "bitcoin 0.31.3",
@@ -2775,7 +2775,7 @@ dependencies = [
 
 [[package]]
 name = "metashrew-memory-stress"
-version = "9.1.0-rc.4"
+version = "9.1.0-rc.5"
 dependencies = [
  "bitcoin 0.32.8",
  "metashrew-core",
@@ -2784,7 +2784,7 @@ dependencies = [
 
 [[package]]
 name = "metashrew-minimal"
-version = "9.1.0-rc.4"
+version = "9.1.0-rc.5"
 dependencies = [
  "anyhow",
  "bitcoin 0.32.8",
@@ -2795,7 +2795,7 @@ dependencies = [
 
 [[package]]
 name = "metashrew-runtime"
-version = "9.1.0-rc.4"
+version = "9.1.0-rc.5"
 dependencies = [
  "anyhow",
  "hex",
@@ -2812,7 +2812,7 @@ dependencies = [
 
 [[package]]
 name = "metashrew-support"
-version = "9.1.0-rc.4"
+version = "9.1.0-rc.5"
 dependencies = [
  "anyhow",
  "bech32 0.11.1",
@@ -2824,7 +2824,7 @@ dependencies = [
 
 [[package]]
 name = "metashrew-sync"
-version = "9.1.0-rc.4"
+version = "9.1.0-rc.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2844,7 +2844,7 @@ dependencies = [
 
 [[package]]
 name = "metashrew-tests"
-version = "9.1.0-rc.4"
+version = "9.1.0-rc.5"
 dependencies = [
  "actix-cors",
  "actix-web",
@@ -2875,7 +2875,7 @@ dependencies = [
 
 [[package]]
 name = "metashrew-validator-core"
-version = "9.1.0-rc.4"
+version = "9.1.0-rc.5"
 dependencies = [
  "anyhow",
  "bitcoin 0.32.8",
@@ -3853,7 +3853,7 @@ dependencies = [
 
 [[package]]
 name = "rockshrew-diff"
-version = "9.1.0-rc.4"
+version = "9.1.0-rc.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -3862,7 +3862,7 @@ dependencies = [
 
 [[package]]
 name = "rockshrew-mono"
-version = "9.1.0-rc.4"
+version = "9.1.0-rc.5"
 dependencies = [
  "actix-cors",
  "actix-web",
@@ -3909,7 +3909,7 @@ dependencies = [
 
 [[package]]
 name = "rockshrew-runtime"
-version = "9.1.0-rc.4"
+version = "9.1.0-rc.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4147,14 +4147,14 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
 name = "rustls"
-version = "0.23.45"
+version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
+checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "once_cell",
  "rustls-pki-types",
@@ -4174,9 +4174,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.15"
+version = "0.103.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
+checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -4719,7 +4719,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4853,9 +4853,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.51.0"
+version = "1.51.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2bd1c4c0fc4a7ab90fc15ef6daaa3ec3b893f004f915f2392557ed23237820cd"
+checksum = "a13e32eacd0222f9658be2ccbd83b718bfd9bfb0d54b5921913c184cb86124a5"
 dependencies = [
  "bytes",
  "libc",
@@ -5795,7 +5795,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
