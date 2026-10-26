@@ -7,15 +7,21 @@ Release notes for older versions are on the GitHub releases page
 
 A dependency-only security release. It supersedes **v9.1.0-rc.5**: that tag was signed and
 pushed, but its tag pipeline failed `cargo deny` on four zstd advisories published after rc.5
-was reviewed, so rc.5 was never mirrored or released. Use rc.6. **wasmtime moves to the 49.0.4
+was reviewed. The hourly GitHub mirror still copied the tag, but rc.5 was never released (no
+GitHub Release). Use rc.6. **wasmtime moves to the 49.0.4
 patch release** (below). The indexing, storage and reorg code doesn't change, and on x86_64
 rc.6 indexes the same blocks into the same state as rc.4 and rc.5. It pairs with alkanes
 **v3.0.0-rc.4**, whose indexer wasm is byte-identical to rc.3.
 
 - **wasmtime 49.0.3 → 49.0.4 (RUSTSEC-2026-0378, RUSTSEC-2026-0379).** 0379 is a Cranelift
-  bug on **aarch64**: a large wasm `br_table` could jump to the wrong target, so an indexer
-  built from rc.5 or earlier and run on ARM (Apple Silicon, Graviton, Ampere) could execute
-  the indexer wasm differently from an x86_64 one. Operators on aarch64 should upgrade.
+  bug on **aarch64**: a wasm `br_table` with more than about 262,000 targets could jump to the
+  wrong target (ARM: Apple Silicon, Graviton, Ampere). wasmtime 49.0.4 fixes the code
+  generation, and on **every architecture** it now **refuses to load a module with a
+  `br_table` of more than 65,520 targets** (49.0.3 accepted them). So an indexer wasm that loads
+  on rc.5 can fail to load on rc.6. Check any non-alkanes indexer you host against that limit.
+  alkanes' indexer wasm (`27b003d1`) is well under both limits, so state indexed on aarch64
+  with rc.5 or earlier is not affected and **needs no reindex**. Operators on aarch64 should
+  still upgrade.
   0378 is a panic in component-model streams, which metashrew doesn't use (it runs core wasm
   modules only). Only the wasmtime, Cranelift and Pulley crates change version (patch
   bumps), and the enabled features are unchanged. Both `deny.toml` ignores are removed, and
