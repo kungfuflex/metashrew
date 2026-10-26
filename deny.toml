@@ -41,19 +41,28 @@ multiple-versions = "allow"
 # cargo-deny counts as wildcards (allow-wildcard-paths only covers
 # `publish = false` crates). There are no registry wildcards today.
 wildcards = "allow"
-# Regression guards for the rc.1 audit findings: none of these may come
-# back into the default-feature (production) graph. Ranges use `<=` on the
-# last affected version: cargo-deny 0.20 mis-matches `<` requirements
-# (checked: `h2@<0.5` did not match 0.4.20, `hyper@<1` matched 1.9.0).
+# Regression guards for the audit findings: none of these may come back
+# into the default-feature (production) graph. They use the
+# `{ name, version }` form on purpose. cargo-deny 0.20.2 drops the operator
+# in the `crate = "name@<req>"` form and matches the bare version exactly
+# (checked against the rc.5 lockfile: `zstd@<=0.14.2` and `zstd@<0.14.3`
+# did not match zstd 0.13.3, `tokio@<1.51.6` matched 1.51.6), so the
+# `@<=` guards before rc.6 only banned the one version they named.
+# `version = "<=X"` is a real semver range. Each range is checked by
+# running this file against the lockfile it guards against.
 deny = [
-    { crate = "h2@<=0.4.15", reason = "RUSTSEC-2026-0258 (unbounded empty DATA frames); h2 0.3 has no fix" },
-    { crate = "hyper@<=0.14.99", reason = "hyper 0.14 is what pulled in h2 0.3" },
-    { crate = "actix-http@<=3.12.0", reason = "GHSA-xhj4-vrgc-hr34 (CL.TE request smuggling)" },
-    { crate = "wasmtime@<=49.0.2", reason = "17 RustSec advisories closed by 48.0.4 / 49.0.2, then RUSTSEC-2026-0353..0364 (12) closed by 49.0.3" },
-    { crate = "rustls-webpki@<=0.103.15", reason = "RUSTSEC-2026-0382 / CVE-2026-111943 (distrusted intermediates accepted)" },
-    { crate = "rustls@<=0.23.45", reason = "RUSTSEC-2026-0346..0349" },
-    { crate = "webpki-roots@<=1.0.9", reason = "RUSTSEC-2026-0381 / CVE-2026-111943 (distrusted roots bundled); use >= 1.0.10" },
-    { crate = "tokio@<=1.51.5", reason = "RUSTSEC-2026-0386 (AsyncFd I/O safety), fixed in the 1.51 LTS at 1.51.6" },
+    { name = "h2", version = "<=0.4.15", reason = "RUSTSEC-2026-0258 (unbounded empty DATA frames); h2 0.3 has no fix" },
+    { name = "hyper", version = "<=0.14.99", reason = "hyper 0.14 is what pulled in h2 0.3" },
+    { name = "actix-http", version = "<=3.12.0", reason = "GHSA-xhj4-vrgc-hr34 (CL.TE request smuggling)" },
+    { name = "wasmtime", version = "<=49.0.2", reason = "17 RustSec advisories closed by 48.0.4 / 49.0.2, then RUSTSEC-2026-0353..0364 (12) closed by 49.0.3" },
+    { name = "rustls-webpki", version = "<=0.103.15", reason = "RUSTSEC-2026-0382 / CVE-2026-111943 (distrusted intermediates accepted)" },
+    { name = "rustls", version = "<=0.23.45", reason = "RUSTSEC-2026-0346..0349" },
+    { name = "webpki-roots", version = "<=1.0.9", reason = "RUSTSEC-2026-0381 / CVE-2026-111943 (distrusted roots bundled); use >= 1.0.10" },
+    { name = "tokio", version = "<=1.51.5", reason = "RUSTSEC-2026-0386 (AsyncFd I/O safety), fixed in the 1.51 LTS at 1.51.6" },
+    { name = "zstd", version = "<=0.14.2", reason = "RUSTSEC-2026-0391 (stream context reuse leaks data); 0.13 has no fix" },
+    { name = "zstd-safe", version = "<=8.1.99", reason = "RUSTSEC-2026-0398 (seekable), RUSTSEC-2026-0403 (legacy-frame stream decode exposes uninitialized memory)" },
+    { name = "zstd-sys", version = "<=2.1.1", reason = "RUSTSEC-2026-0410 (wasm32 allocator shim)" },
+    { crate = "wasmtime-internal-cache", reason = "wasmtime's `cache` feature: unused, and pulled zstd 0.13 (see the workspace wasmtime features)" },
     { crate = "russh", reason = "pre-auth advisories; allowed only behind the non-default ssh-tunnel feature" },
     { crate = "russh-keys", reason = "see russh" },
 ]

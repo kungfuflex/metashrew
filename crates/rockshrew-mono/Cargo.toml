@@ -1,6 +1,6 @@
 [package]
 name = "rockshrew-mono"
-version = "9.1.0-rc.5"
+version = "9.1.0-rc.6"
 edition = "2021"
 
 [lib]
@@ -20,7 +20,7 @@ async-trait = "0.1"
 rand = "0.8"
 reqwest = { version = "0.12.12", features = ["json"] }
 metashrew-runtime = { path = "../metashrew-runtime" }
-wasmtime = "49.0.3"
+wasmtime = { workspace = true }
 rockshrew-runtime = { path = "../rockshrew-runtime" }
 metashrew-sync = { path = "../metashrew-sync" }
 serde_json = "1.0.136"
@@ -28,8 +28,12 @@ actix-web = { version = "4.9.0", default-features = false, features = [
     # Every actix-web default feature except `http2`: the server binds plain
     # HTTP/1.1 (`HttpServer::bind`), so h2c/ALPN is never negotiated, and
     # `http2` is what pulls h2 0.3 (RUSTSEC-2026-0258, no 0.3 fix) into the
-    # binary through actix-http.
-    "macros", "compress-brotli", "compress-gzip", "compress-zstd",
+    # binary through actix-http. Also without `compress-zstd`: no handler uses
+    # the Compress middleware, and with it actix-http decoded any request body
+    # sent with `Content-Encoding: zstd` through zstd 0.13's stream::write::Decoder
+    # (RUSTSEC-2026-0403). Such bodies now reach the handler undecoded and
+    # fail to parse.
+    "macros", "compress-brotli", "compress-gzip",
     "cookies", "unicode", "compat", "ws",
 ] }
 serde = "1.0.217"
@@ -64,7 +68,7 @@ russh = { version = "0.50.0-beta.7", optional = true }
 russh-keys = { version = "0.50.0-beta.7", optional = true }
 once_cell = "1.19.0"  # Added for lazy static initialization
 sha2 = "0.10.9"
-zstd = "0.13.0"  # Added for snapshot compression
+zstd = "0.14.3"  # snapshot compression (bulk encode_all/decode_all); >= 0.14.3 for RUSTSEC-2026-0391
 # RLIMIT_NOFILE bump at startup. RocksDB holds ~1 FD per open SST and
 # we run with set_max_open_files(50000); a typical OS default of
 # 1024 wedges commit_atomic with "Too many open files" once the DB
